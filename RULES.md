@@ -107,7 +107,15 @@ Input: `(sender: string, body: string)`. Output: `Transaction | null` (null when
 - Native modules use **legacy `ReactContextBaseJavaModule`** + `DeviceEventManagerModule.RCTDeviceEventEmitter` — supported under New Arch via the interop layer (no TurboModule codegen needed). Register via `ExpensePackage : ReactPackage` added in `MainApplication.kt`'s `PackageList(this).packages.apply { add(ExpensePackage()) }`.
 - App id / package: `com.expensetracker`.
 - Toolchain: Node 22, JDK 21, Android SDK at `C:/Users/hp/AppData/Local/Android/Sdk` (see `android/local.properties`, gitignored). `ANDROID_HOME` is unset in shell → call `adb`/`emulator` by full path.
-- Build: `cd android && ./gradlew assembleDebug`. Run: start emulator, `npx react-native run-android`.
+
+### Build variants — read this before shipping anything to the phone
+- **Ship `assembleRelease`, NOT `assembleDebug`.** This is a sideloaded standalone app — the user just installs it and uses it, with no laptop/Metro/dev server in the loop.
+  - **Debug APK is NOT standalone.** It does not contain the JS bundle; at launch it fetches it from the Metro dev server (`localhost:8081`) over USB/Wi-Fi. Off the dev machine it shows the red "unable to load script / Reload" bundler-error screen. Debug is for `npx react-native run-android` during development ONLY.
+  - **Release APK is standalone.** `react.debuggableVariants` excludes `release`, so the JS is bundled + Hermes-compiled into the APK. Runs fully offline.
+- Build the deliverable: `cd android && ./gradlew assembleRelease` → `android/app/build/outputs/apk/release/app-release.apk`.
+- Signing: `release` uses the `debug` keystore on purpose (`signingConfigs.debug`) — fine for personal sideloading, and it's the SAME key as the debug variant, so a release APK installs/updates over a previously-installed debug build without uninstall. (For a "real" release you'd generate your own keystore; not needed here.)
+- `minifyEnabled` is currently **false** (`enableProguardInReleaseBuilds=false`) → no R8 stripping risk for the Kotlin native modules. If you later turn ProGuard on, verify `SmsModule`/`NotificationModule`/`NotificationService`/op-sqlite survive.
+- Install to phone: `adb install -r android/app/build/outputs/apk/release/app-release.apk` (or copy the APK over and tap it).
 
 ---
 
