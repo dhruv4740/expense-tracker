@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive icon foreground — 108×108dp viewport, safe zone 18dp inset (inner 72dp).
+  Motif: rupee (₹) symbol with two small bar-chart columns at the bottom.
+  All artwork is white so it reads on any background.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- ── Rupee ₹ glyph ──────────────────────────────────────────────────
+         Constructed from three rectangles + one triangle cut-out:
+           1. Top horizontal bar
+           2. Middle horizontal bar
+           3. Vertical stem
+           4. Diagonal slash (parallelogram, bottom-right to top-left)
+         Reference: Unicode ₹ shape — two horizontal bars atop a vertical stem,
+         with a diagonal line bisecting from top-right to bottom-left.
+         All coordinates are within the 72dp safe zone (x: 30–78, y: 22–86).
+    -->
+
+    <!-- Vertical stem of ₹ -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="
+            M 47,38
+            L 52,38
+            L 52,82
+            L 47,82
+            Z" />
+
+    <!-- Top horizontal bar of ₹ -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="
+            M 35,28
+            L 73,28
+            Q 73,28 73,31
+            Q 73,34 73,34
+            L 35,34
+            Z" />
+
+    <!-- Middle horizontal bar of ₹ (with right-side rounded hint) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="
+            M 35,38
+            L 68,38
+            Q 73,38 73,43
+            Q 73,48 68,48
+            L 35,48
+            Z" />
+
+    <!-- Diagonal slash — the defining feature of ₹
+         Goes from upper-right area down to lower-left of the stem.
+         Parallelogram: top-right corner to bottom-left, 4dp wide stroke. -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="
+            M 68,38
+            L 72,38
+            L 47,82
+            L 43,82
+            Z" />
+
+    <!-- ── Mini bar chart (bottom accent, inside safe zone) ────────────────
+         Three bars of increasing height to suggest financial growth.
+         Positioned at the bottom-left of the safe zone (x 30–43, y 66–82).
+    -->
+    <!-- Bar 1 (short) -->
+    <path
+        android:fillColor="#FFFFFFAA"
+        android:pathData="
+            M 30,76
+            L 34,76
+            L 34,82
+            L 30,82
+            Z" />
+
+    <!-- Bar 2 (medium) -->
+    <path
+        android:fillColor="#FFFFFFAA"
+        android:pathData="
+            M 36,70
+            L 40,70
+            L 40,82
+            L 36,82
+            Z" />
+
+    <!-- Bar 3 (tall) — partially behind the ₹ stem, intentional layering -->
+    <path
+        android:fillColor="#FFFFFFAA"
+        android:pathData="
+            M 42,64
+            L 46,64
+            L 46,82
+            L 42,82
+            Z" />
+
+</vector>
