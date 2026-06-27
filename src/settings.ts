@@ -1,0 +1,72 @@
+// ─── Typed settings wrapper over db.getSetting / db.setSetting ───────────────
+//
+// All values are JSON-serialised strings in the app_settings table.
+// This module is the single place that knows about setting key names and their
+// expected shapes — consumers import typed helpers, never raw string keys.
+
+import { getSetting, setSetting } from './db';
+import type { Identity } from './identity';
+
+// ─── Generic JSON helpers ─────────────────────────────────────────────────────
+
+/**
+ * Read a JSON-encoded setting and return it as T, or `fallback` if the key is
+ * absent or the stored value cannot be parsed.
+ */
+export function getJSON<T>(key: string, fallback: T): T {
+  try {
+    const raw = getSetting(key);
+    if (raw == null) {
+      return fallback;
+    }
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * JSON-encode `value` and persist it under `key`.
+ */
+export function setJSON(key: string, value: unknown): void {
+  setSetting(key, JSON.stringify(value));
+}
+
+// ─── Identity ─────────────────────────────────────────────────────────────────
+
+const IDENTITY_KEY = 'identity';
+
+const IDENTITY_DEFAULTS: Identity = {
+  name: '',
+  phones: [],
+  upiHandles: [],
+  accountLast4: [],
+};
+
+/**
+ * Load the user's Identity from the settings store.
+ * Returns safe defaults (all arrays empty, name empty) when no identity has
+ * been configured yet.
+ */
+export function getIdentity(): Identity {
+  const stored = getJSON<Partial<Identity>>(IDENTITY_KEY, {});
+  return {
+    name: stored.name ?? IDENTITY_DEFAULTS.name,
+    phones: Array.isArray(stored.phones)
+      ? stored.phones
+      : IDENTITY_DEFAULTS.phones,
+    upiHandles: Array.isArray(stored.upiHandles)
+      ? stored.upiHandles
+      : IDENTITY_DEFAULTS.upiHandles,
+    accountLast4: Array.isArray(stored.accountLast4)
+      ? stored.accountLast4
+      : IDENTITY_DEFAULTS.accountLast4,
+  };
+}
+
+/**
+ * Persist the user's Identity to the settings store.
+ */
+export function setIdentity(identity: Identity): void {
+  setJSON(IDENTITY_KEY, identity);
+}

@@ -278,11 +278,14 @@ export function updateTransaction(
 ): boolean {
   const conn = requireDb();
   const cols: string[] = [];
-  const vals: unknown[] = [];
+  const vals: Array<string | number | null> = [];
   for (const key of EDITABLE_FIELDS) {
     if (key in fields) {
       cols.push(`${key} = ?`);
-      vals.push((fields as Record<string, unknown>)[key] ?? null);
+      vals.push(
+        (fields as Record<string, string | number | null | undefined>)[key] ??
+          null,
+      );
     }
   }
   if (cols.length === 0) {
@@ -350,7 +353,7 @@ export function queryTransactions(
 ): TransactionRow[] {
   const conn = requireDb();
   const where: string[] = [];
-  const params: unknown[] = [];
+  const params: Array<string | number> = [];
 
   if (filters.from != null) {
     where.push('timestamp >= ?');
