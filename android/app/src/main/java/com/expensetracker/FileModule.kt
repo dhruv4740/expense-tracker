@@ -52,7 +52,7 @@ class FileModule(private val reactContext: ReactApplicationContext) :
     private val activityEventListener: ActivityEventListener =
         object : BaseActivityEventListener() {
             override fun onActivityResult(
-                activity: Activity?,
+                activity: Activity,
                 requestCode: Int,
                 resultCode: Int,
                 data: Intent?,
@@ -94,7 +94,7 @@ class FileModule(private val reactContext: ReactApplicationContext) :
             return
         }
 
-        val activity = currentActivity
+        val activity = getCurrentActivity()
         if (activity == null) {
             promise.reject(ERR_NO_ACTIVITY, "No foreground Activity available — open the app first")
             return
@@ -133,7 +133,7 @@ class FileModule(private val reactContext: ReactApplicationContext) :
             return
         }
 
-        val activity = currentActivity
+        val activity = getCurrentActivity()
         if (activity == null) {
             promise.reject(ERR_NO_ACTIVITY, "No foreground Activity available — open the app first")
             return

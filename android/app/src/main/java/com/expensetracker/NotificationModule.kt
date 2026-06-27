@@ -1,5 +1,6 @@
 package com.expensetracker
 
+import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import com.facebook.react.bridge.Arguments
@@ -159,7 +160,7 @@ class NotificationModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun getAllowlist(promise: Promise) {
         try {
-            val prefs = reactContext.getSharedPreferences(SETTINGS_PREFS, ReactApplicationContext.MODE_PRIVATE)
+            val prefs = reactContext.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
             val json = prefs.getString(ALLOWLIST_KEY, null)
             val result: WritableArray = Arguments.createArray()
             if (!json.isNullOrBlank()) {
@@ -201,7 +202,7 @@ class NotificationModule(private val reactContext: ReactApplicationContext) :
                 if (!pkg.isNullOrBlank()) arr.put(pkg)
             }
             reactContext
-                .getSharedPreferences(SETTINGS_PREFS, ReactApplicationContext.MODE_PRIVATE)
+                .getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
                 .edit()
                 .putString(ALLOWLIST_KEY, arr.toString())
                 .apply()
