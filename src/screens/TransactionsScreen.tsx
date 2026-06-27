@@ -1,103 +1,506 @@
-import React, { useCallback, useEffect, useState } from 'react';
+// ─── TransactionsScreen ───────────────────────────────────────────────────────
+//
+// SectionList of transactions grouped by day, with search + filter modal.
+// Perf: memoised renderItem, keyExtractor, SectionList windowing.
+// Self-transfers hidden by default; togglable via filter.
+
+import React, {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import {
+  Alert,
   DeviceEventEmitter,
-  FlatList,
-  ListRenderItem,
+  Modal,
+  SectionList,
   StyleSheet,
+  Switch,
   Text,
+  TextInput,
+  TouchableOpacity,
   View,
 } from 'react-native';
+import type { SectionListData } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { getAll, TransactionRow } from '../db';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RootStackParamList } from '../../App';
+
+import {
+  deleteTransaction,
+  queryTransactions,
+} from '../db';
+import type { TransactionRow, TransactionType, TransactionFilters } from '../db';
+import { CATEGORIES } from '../categories';
 import { DATA_CHANGED } from '../sync';
+import {
+  AmountText,
+  CategoryChip,
+  EmptyState,
+  Fab,
+  Icon,
+  SectionHeader,
+} from '../components';
+import { theme } from '../theme';
+import { formatDate, groupByDay, monthRange, lastNDaysRange } from '../dates';
 
-// ─── helpers ────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-function formatDate(ts: number): string {
-  const d = new Date(ts);
-  const date = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
-  const time = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
-  return `${date}, ${time}`;
+type Section = { title: string; data: TransactionRow[] };
+
+type DatePreset = 'month' | 'lastmonth' | 'last30' | 'all';
+
+interface FilterState {
+  search: string;
+  datePreset: DatePreset;
+  selectedCategories: string[];
+  selectedTypes: TransactionType[];
+  showSelf: boolean;
 }
 
-function displayName(item: TransactionRow): string {
-  return item.merchant ?? item.source ?? 'Unknown';
+interface Props {
+  navigation: NativeStackNavigationProp<RootStackParamList, 'Tabs'>;
 }
 
-// ─── row component (stable ref via React.memo) ───────────────────────────────
+// ─── Row component (memoised for SectionList perf) ────────────────────────────
 
-const TransactionRow_ = React.memo(({ item }: { item: TransactionRow }) => (
-  <View style={styles.row}>
-    <View style={styles.rowLeft}>
-      <Text style={styles.merchant} numberOfLines={1}>
-        {displayName(item)}
-      </Text>
-      <Text style={styles.sub}>
-        {item.category}  ·  {formatDate(item.timestamp)}
-      </Text>
-    </View>
-    <Text style={[styles.amount, item.type === 'income' ? styles.income : styles.expense]}>
-      ₹{item.amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-    </Text>
-  </View>
-));
+const TxRow = React.memo(function TxRow({
+  item,
+  onPress,
+  onLongPress,
+}: {
+  item: TransactionRow;
+  onPress: () => void;
+  onLongPress: () => void;
+}) {
+  const displayName =
+    item.merchant ?? item.counterparty ?? item.source ?? 'Unknown';
+  return (
+    <TouchableOpacity
+      style={styles.row}
+      onPress={onPress}
+      onLongPress={onLongPress}
+      activeOpacity={0.7}
+    >
+      <CategoryChip category={item.category} small />
+      <View style={styles.rowMid}>
+        <Text style={styles.merchant} numberOfLines={1}>
+          {displayName}
+        </Text>
+        <Text style={styles.rowSub} numberOfLines={1}>
+          {formatDate(item.timestamp)}
+        </Text>
+      </View>
+      <AmountText amount={item.amount} type={item.type} size={theme.font.size.md} />
+    </TouchableOpacity>
+  );
+});
 
-// ─── screen ──────────────────────────────────────────────────────────────────
+// ─── Filter Modal ─────────────────────────────────────────────────────────────
 
-export default function TransactionsScreen() {
-  const [transactions, setTransactions] = useState<TransactionRow[]>([]);
+const DATE_PRESETS: { label: string; value: DatePreset }[] = [
+  { label: 'This month', value: 'month' },
+  { label: 'Last month', value: 'lastmonth' },
+  { label: 'Last 30 days', value: 'last30' },
+  { label: 'All time', value: 'all' },
+];
 
-  // Reload from DB on focus AND whenever a live event inserts a new row.
-  const load = useCallback(() => {
-    setTransactions(getAll()); // already DESC by timestamp
-  }, []);
+const TYPE_OPTIONS: { label: string; value: TransactionType }[] = [
+  { label: 'Debit', value: 'expense' },
+  { label: 'Credit', value: 'income' },
+  { label: 'Self', value: 'self' },
+];
 
-  useFocusEffect(load);
+const FilterModal = React.memo(function FilterModal({
+  visible,
+  filter,
+  onClose,
+  onApply,
+}: {
+  visible: boolean;
+  filter: FilterState;
+  onClose: () => void;
+  onApply: (f: FilterState) => void;
+}) {
+  const [local, setLocal] = useState<FilterState>(filter);
 
   useEffect(() => {
-    const sub = DeviceEventEmitter.addListener(DATA_CHANGED, load);
+    if (visible) {
+      setLocal(filter);
+    }
+  }, [visible, filter]);
+
+  function toggleCategory(cat: string) {
+    setLocal(prev => ({
+      ...prev,
+      selectedCategories: prev.selectedCategories.includes(cat)
+        ? prev.selectedCategories.filter(c => c !== cat)
+        : [...prev.selectedCategories, cat],
+    }));
+  }
+
+  function toggleType(t: TransactionType) {
+    setLocal(prev => ({
+      ...prev,
+      selectedTypes: prev.selectedTypes.includes(t)
+        ? prev.selectedTypes.filter(x => x !== t)
+        : [...prev.selectedTypes, t],
+    }));
+  }
+
+  return (
+    <Modal
+      visible={visible}
+      animationType="slide"
+      transparent
+      onRequestClose={onClose}
+    >
+      <View style={fStyles.overlay}>
+        <View style={fStyles.sheet}>
+          <View style={fStyles.header}>
+            <Text style={fStyles.title}>Filter</Text>
+            <TouchableOpacity onPress={onClose}>
+              <Icon name="close" size={22} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
+
+          <Text style={fStyles.sectionLabel}>DATE RANGE</Text>
+          <View style={fStyles.chips}>
+            {DATE_PRESETS.map(p => (
+              <TouchableOpacity
+                key={p.value}
+                style={[
+                  fStyles.chip,
+                  local.datePreset === p.value ? fStyles.chipActive : undefined,
+                ]}
+                onPress={() => setLocal(prev => ({ ...prev, datePreset: p.value }))}
+              >
+                <Text
+                  style={[
+                    fStyles.chipText,
+                    local.datePreset === p.value ? fStyles.chipTextActive : undefined,
+                  ]}
+                >
+                  {p.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <Text style={fStyles.sectionLabel}>CATEGORIES</Text>
+          <View style={fStyles.chips}>
+            {CATEGORIES.map(cat => (
+              <TouchableOpacity
+                key={cat}
+                style={[
+                  fStyles.chip,
+                  local.selectedCategories.includes(cat) ? fStyles.chipActive : undefined,
+                ]}
+                onPress={() => toggleCategory(cat)}
+              >
+                <Text
+                  style={[
+                    fStyles.chipText,
+                    local.selectedCategories.includes(cat)
+                      ? fStyles.chipTextActive
+                      : undefined,
+                  ]}
+                >
+                  {cat}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <Text style={fStyles.sectionLabel}>TYPE</Text>
+          <View style={fStyles.chips}>
+            {TYPE_OPTIONS.map(t => (
+              <TouchableOpacity
+                key={t.value}
+                style={[
+                  fStyles.chip,
+                  local.selectedTypes.includes(t.value) ? fStyles.chipActive : undefined,
+                ]}
+                onPress={() => toggleType(t.value)}
+              >
+                <Text
+                  style={[
+                    fStyles.chipText,
+                    local.selectedTypes.includes(t.value)
+                      ? fStyles.chipTextActive
+                      : undefined,
+                  ]}
+                >
+                  {t.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <View style={fStyles.toggleRow}>
+            <Text style={fStyles.toggleLabel}>Show self-transfers</Text>
+            <Switch
+              value={local.showSelf}
+              onValueChange={v => setLocal(prev => ({ ...prev, showSelf: v }))}
+              trackColor={{ true: theme.colors.accent, false: theme.colors.surfaceAlt }}
+              thumbColor={theme.colors.textPrimary}
+            />
+          </View>
+
+          <View style={fStyles.actions}>
+            <TouchableOpacity
+              style={fStyles.resetBtn}
+              onPress={() =>
+                setLocal({
+                  search: local.search,
+                  datePreset: 'month',
+                  selectedCategories: [],
+                  selectedTypes: [],
+                  showSelf: false,
+                })
+              }
+            >
+              <Text style={fStyles.resetText}>Reset</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={fStyles.applyBtn}
+              onPress={() => onApply(local)}
+            >
+              <Text style={fStyles.applyText}>Apply</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+});
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function buildFilters(f: FilterState): TransactionFilters {
+  const now = Date.now();
+  let from: number | undefined;
+  let to: number | undefined;
+
+  if (f.datePreset === 'month') {
+    const r = monthRange();
+    from = r.from;
+    to = r.to;
+  } else if (f.datePreset === 'lastmonth') {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = d.getMonth();
+    from = new Date(year, month - 1, 1).getTime();
+    to = new Date(year, month, 0, 23, 59, 59, 999).getTime();
+  } else if (f.datePreset === 'last30') {
+    const r = lastNDaysRange(30);
+    from = r.from;
+    to = r.to;
+  }
+
+  return {
+    from,
+    to: to ?? now,
+    categories:
+      f.selectedCategories.length > 0 ? f.selectedCategories : undefined,
+    types: f.selectedTypes.length > 0 ? f.selectedTypes : undefined,
+    search: f.search.trim() || undefined,
+    includeSelf: f.showSelf,
+  };
+}
+
+const DEFAULT_FILTER: FilterState = {
+  search: '',
+  datePreset: 'month',
+  selectedCategories: [],
+  selectedTypes: [],
+  showSelf: false,
+};
+
+// ─── Screen ──────────────────────────────────────────────────────────────────
+
+export default function TransactionsScreen({ navigation }: Props) {
+  const [filter, setFilter] = useState<FilterState>(DEFAULT_FILTER);
+  const [sections, setSections] = useState<Section[]>([]);
+  const [showFilter, setShowFilter] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const load = useCallback((f: FilterState) => {
+    const rows = queryTransactions(buildFilters(f));
+    setSections(groupByDay(rows));
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      load(filter);
+    }, [load, filter]),
+  );
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(DATA_CHANGED, () => load(filter));
     return () => sub.remove();
-  }, [load]);
+  }, [load, filter]);
+
+  function handleSearchChange(text: string) {
+    const newFilter = { ...filter, search: text };
+    setFilter(newFilter);
+    if (debounceRef.current != null) {
+      clearTimeout(debounceRef.current);
+    }
+    debounceRef.current = setTimeout(() => {
+      load(newFilter);
+    }, 250);
+  }
+
+  function handleApplyFilter(f: FilterState) {
+    setFilter(f);
+    setShowFilter(false);
+    load(f);
+  }
+
+  const handlePress = useCallback(
+    (item: TransactionRow) => {
+      navigation.navigate('EditTransaction', { tx: item });
+    },
+    [navigation],
+  );
+
+  const handleLongPress = useCallback(
+    (item: TransactionRow) => {
+      Alert.alert(
+        item.merchant ?? 'Transaction',
+        'What would you like to do?',
+        [
+          {
+            text: 'Edit',
+            onPress: () => navigation.navigate('EditTransaction', { tx: item }),
+          },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: () => {
+              if (item.id != null) {
+                deleteTransaction(item.id);
+                DeviceEventEmitter.emit(DATA_CHANGED);
+              }
+            },
+          },
+          { text: 'Cancel', style: 'cancel' },
+        ],
+      );
+    },
+    [navigation],
+  );
 
   const keyExtractor = useCallback(
     (item: TransactionRow) => String(item.id),
     [],
   );
 
-  const renderItem = useCallback<ListRenderItem<TransactionRow>>(
-    ({ item }) => <TransactionRow_ item={item} />,
+  const renderItem = useCallback(
+    ({ item }: { item: TransactionRow }) => (
+      <TxRow
+        item={item}
+        onPress={() => handlePress(item)}
+        onLongPress={() => handleLongPress(item)}
+      />
+    ),
+    [handlePress, handleLongPress],
+  );
+
+  const renderSectionHeader = useCallback(
+    ({ section }: { section: SectionListData<TransactionRow, Section> }) => (
+      <SectionHeader title={section.title} />
+    ),
     [],
   );
 
   const ListEmpty = useCallback(
     () => (
-      <View style={styles.empty}>
-        <Text style={styles.emptyText}>No transactions yet</Text>
-      </View>
+      <EmptyState
+        icon="list"
+        title="No transactions"
+        subtitle="Transactions matching your filters will appear here."
+      />
     ),
     [],
   );
 
   return (
-    <FlatList
-      data={transactions}
-      keyExtractor={keyExtractor}
-      renderItem={renderItem}
-      ListEmptyComponent={ListEmpty}
-      contentContainerStyle={transactions.length === 0 ? styles.emptyContainer : styles.listContent}
-      removeClippedSubviews
-      initialNumToRender={20}
-      maxToRenderPerBatch={20}
-      windowSize={5}
-    />
+    <View style={styles.container}>
+      {/* Search + filter bar */}
+      <View style={styles.searchBar}>
+        <Icon name="search" size={18} color={theme.colors.textMuted} />
+        <TextInput
+          style={styles.searchInput}
+          value={filter.search}
+          onChangeText={handleSearchChange}
+          placeholder="Search transactions…"
+          placeholderTextColor={theme.colors.textMuted}
+          returnKeyType="search"
+        />
+        <TouchableOpacity onPress={() => setShowFilter(true)} style={styles.filterBtn}>
+          <Icon name="filter" size={20} color={theme.colors.accent} />
+        </TouchableOpacity>
+      </View>
+
+      <SectionList<TransactionRow, Section>
+        sections={sections}
+        keyExtractor={keyExtractor}
+        renderItem={renderItem}
+        renderSectionHeader={renderSectionHeader}
+        ListEmptyComponent={ListEmpty}
+        stickySectionHeadersEnabled={false}
+        removeClippedSubviews
+        initialNumToRender={20}
+        maxToRenderPerBatch={20}
+        windowSize={7}
+        contentContainerStyle={
+          sections.length === 0 ? styles.emptyContainer : styles.listContent
+        }
+      />
+
+      <Fab onPress={() => navigation.navigate('EditTransaction', {})} />
+
+      <FilterModal
+        visible={showFilter}
+        filter={filter}
+        onClose={() => setShowFilter(false)}
+        onApply={handleApplyFilter}
+      />
+    </View>
   );
 }
 
-// ─── styles ──────────────────────────────────────────────────────────────────
+// ─── Styles ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: theme.colors.bg,
+  },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.surface,
+    margin: theme.spacing.md,
+    borderRadius: theme.radius.md,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    gap: theme.spacing.sm,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: theme.font.size.md,
+    color: theme.colors.textPrimary,
+    padding: 0,
+  },
+  filterBtn: {
+    padding: theme.spacing.xs,
+  },
   listContent: {
-    paddingVertical: 8,
+    paddingBottom: 80,
   },
   emptyContainer: {
     flexGrow: 1,
@@ -105,43 +508,121 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E0E0E0',
-    backgroundColor: '#FFFFFF',
+    borderBottomColor: theme.colors.border,
+    gap: theme.spacing.sm,
+    backgroundColor: theme.colors.bg,
   },
-  rowLeft: {
+  rowMid: {
     flex: 1,
-    marginRight: 12,
+    gap: 2,
   },
   merchant: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: '#1A1A1A',
+    fontSize: theme.font.size.md,
+    fontWeight: theme.font.weight.medium,
+    color: theme.colors.textPrimary,
   },
-  sub: {
-    fontSize: 12,
-    color: '#757575',
-    marginTop: 2,
+  rowSub: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textMuted,
   },
-  amount: {
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  expense: {
-    color: '#C62828',
-  },
-  income: {
-    color: '#2E7D32',
-  },
-  empty: {
+});
+
+const fStyles = StyleSheet.create({
+  overlay: {
     flex: 1,
-    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: theme.colors.surface,
+    borderTopLeftRadius: theme.radius.lg,
+    borderTopRightRadius: theme.radius.lg,
+    padding: theme.spacing.lg,
+    paddingBottom: 36,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: theme.spacing.lg,
+  },
+  title: {
+    fontSize: theme.font.size.lg,
+    fontWeight: theme.font.weight.bold,
+    color: theme.colors.textPrimary,
+  },
+  sectionLabel: {
+    fontSize: theme.font.size.xs,
+    fontWeight: theme.font.weight.semibold,
+    color: theme.colors.textMuted,
+    letterSpacing: 1.1,
+    marginTop: theme.spacing.md,
+    marginBottom: theme.spacing.sm,
+  },
+  chips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
+  },
+  chip: {
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: 6,
+    borderRadius: theme.radius.pill,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceAlt,
+  },
+  chipActive: {
+    borderColor: theme.colors.accent,
+    backgroundColor: theme.colors.accent + '22',
+  },
+  chipText: {
+    fontSize: theme.font.size.sm,
+    color: theme.colors.textSecondary,
+  },
+  chipTextActive: {
+    color: theme.colors.accent,
+    fontWeight: theme.font.weight.medium,
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: theme.spacing.lg,
+  },
+  toggleLabel: {
+    fontSize: theme.font.size.md,
+    color: theme.colors.textSecondary,
+  },
+  actions: {
+    flexDirection: 'row',
+    gap: theme.spacing.md,
+    marginTop: theme.spacing.xl,
+  },
+  resetBtn: {
+    flex: 1,
+    padding: theme.spacing.md,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
     alignItems: 'center',
   },
-  emptyText: {
-    fontSize: 16,
-    color: '#9E9E9E',
+  resetText: {
+    color: theme.colors.textSecondary,
+    fontWeight: theme.font.weight.medium,
+  },
+  applyBtn: {
+    flex: 2,
+    padding: theme.spacing.md,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.accent,
+    alignItems: 'center',
+  },
+  applyText: {
+    color: '#000',
+    fontWeight: theme.font.weight.bold,
   },
 });

@@ -14,6 +14,7 @@ import { Alert, AppState, PermissionsAndroid, StatusBar } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { enableScreens } from 'react-native-screens';
 
 import { initDb } from './src/db';
@@ -22,8 +23,15 @@ import {
   isNotificationAccessGranted,
   openNotificationAccessSettings,
 } from './src/native/NotificationModule';
+import { navTheme, theme } from './src/theme';
+import { Icon } from './src/components';
+import type { TransactionRow } from './src/db';
+
+import DashboardScreen from './src/screens/DashboardScreen';
 import TransactionsScreen from './src/screens/TransactionsScreen';
-import SummaryScreen from './src/screens/SummaryScreen';
+import InsightsScreen from './src/screens/InsightsScreen';
+import SettingsScreen from './src/screens/SettingsScreen';
+import EditTransactionScreen from './src/screens/EditTransactionScreen';
 
 // Enable native screen containers for React Navigation (reduces overdraw and
 // improves gesture performance on Android).
@@ -34,12 +42,90 @@ initDb();
 
 // ── Navigation types ─────────────────────────────────────────────────────────
 
-type RootTabParamList = {
-  Transactions: undefined;
-  Summary: undefined;
+export type RootStackParamList = {
+  Tabs: undefined;
+  EditTransaction: { tx?: TransactionRow };
 };
 
+type RootTabParamList = {
+  Dashboard: undefined;
+  Transactions: undefined;
+  Insights: undefined;
+  Settings: undefined;
+};
+
+const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<RootTabParamList>();
+
+// ── Tab navigator ─────────────────────────────────────────────────────────────
+
+function TabNavigator() {
+  return (
+    <Tab.Navigator
+      screenOptions={{
+        headerShown: true,
+        headerStyle: { backgroundColor: theme.colors.bg },
+        headerTitleStyle: {
+          fontWeight: theme.font.weight.semibold,
+          color: theme.colors.textPrimary,
+        },
+        headerTintColor: theme.colors.textPrimary,
+        tabBarActiveTintColor: theme.colors.accent,
+        tabBarInactiveTintColor: theme.colors.textMuted,
+        tabBarStyle: {
+          backgroundColor: theme.colors.bg,
+          borderTopColor: theme.colors.border,
+        },
+        tabBarShowLabel: true,
+      }}
+    >
+      <Tab.Screen
+        name="Dashboard"
+        component={DashboardScreen}
+        options={{
+          title: 'Dashboard',
+          tabBarLabel: 'Home',
+          tabBarIcon: ({ color, size }) => (
+            <Icon name="home" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tab.Screen
+        name="Transactions"
+        component={TransactionsScreen}
+        options={{
+          title: 'Transactions',
+          tabBarLabel: 'Transactions',
+          tabBarIcon: ({ color, size }) => (
+            <Icon name="list" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tab.Screen
+        name="Insights"
+        component={InsightsScreen}
+        options={{
+          title: 'Insights',
+          tabBarLabel: 'Insights',
+          tabBarIcon: ({ color, size }) => (
+            <Icon name="stats" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tab.Screen
+        name="Settings"
+        component={SettingsScreen}
+        options={{
+          title: 'Settings',
+          tabBarLabel: 'Settings',
+          tabBarIcon: ({ color, size }) => (
+            <Icon name="settings" size={size} color={color} />
+          ),
+        }}
+      />
+    </Tab.Navigator>
+  );
+}
 
 // ── App ──────────────────────────────────────────────────────────────────────
 
@@ -98,29 +184,31 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-      <NavigationContainer>
-        <Tab.Navigator
+      <StatusBar barStyle="light-content" backgroundColor="#000000" />
+      <NavigationContainer theme={navTheme}>
+        <Stack.Navigator
           screenOptions={{
-            headerShown: true,
-            headerStyle: { backgroundColor: '#FFFFFF' },
-            headerTitleStyle: { fontWeight: '600', color: '#1A1A1A' },
-            tabBarActiveTintColor: '#C62828',
-            tabBarInactiveTintColor: '#9E9E9E',
-            tabBarStyle: { backgroundColor: '#FFFFFF', borderTopColor: '#E0E0E0' },
+            headerShown: false,
+            contentStyle: { backgroundColor: theme.colors.bg },
           }}
         >
-          <Tab.Screen
-            name="Transactions"
-            component={TransactionsScreen}
-            options={{ title: 'Transactions', tabBarLabel: 'Transactions' }}
+          <Stack.Screen name="Tabs" component={TabNavigator} />
+          <Stack.Screen
+            name="EditTransaction"
+            component={EditTransactionScreen}
+            options={({ route }) => ({
+              headerShown: true,
+              title: route.params?.tx != null ? 'Edit Transaction' : 'Add Transaction',
+              presentation: 'modal',
+              headerStyle: { backgroundColor: theme.colors.bg },
+              headerTitleStyle: {
+                color: theme.colors.textPrimary,
+                fontWeight: theme.font.weight.semibold,
+              },
+              headerTintColor: theme.colors.accent,
+            })}
           />
-          <Tab.Screen
-            name="Summary"
-            component={SummaryScreen}
-            options={{ title: 'Summary', tabBarLabel: 'Summary' }}
-          />
-        </Tab.Navigator>
+        </Stack.Navigator>
       </NavigationContainer>
     </SafeAreaProvider>
   );
