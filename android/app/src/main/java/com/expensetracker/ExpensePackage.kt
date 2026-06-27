@@ -6,7 +6,7 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
 
 /**
- * Registers the app's native modules (SMS + Notification capture).
+ * Registers the app's native modules (SMS + Notification capture + File SAF).
  * Added to the package list in MainApplication.kt.
  */
 class ExpensePackage : ReactPackage {
@@ -14,7 +14,8 @@ class ExpensePackage : ReactPackage {
         reactContext: ReactApplicationContext
     ): List<NativeModule> = listOf(
         SmsModule(reactContext),
-        NotificationModule(reactContext)
+        NotificationModule(reactContext),
+        FileModule(reactContext)
     )
 
     override fun createViewManagers(
