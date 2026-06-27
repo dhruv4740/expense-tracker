@@ -1,23 +1,33 @@
 package com.expensetracker
 
 import android.content.Intent
-import android.os.Build
 import android.provider.Settings
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.ReadableArray
+import com.facebook.react.bridge.WritableArray
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
+import org.json.JSONArray
 
 /**
- * React Native native module for notification-access control.
+ * React Native native module for notification-access control and allowlist management.
  *
  * Battery architecture (RULES.md §1):
  *  - drainBuffer() is intentionally NOT here. Draining the shared EventBuffer is owned by
  *    SmsModule.drainBuffer(), which returns both SMS and notification events in one call.
- *  - This module only handles: live event emission (called by NotificationService when the
- *    app is open), and the Settings helpers so the user can grant/check notification access.
+ *  - This module handles: live event emission (called by NotificationService when the app is
+ *    open), Settings helpers so the user can grant/check notification access, and the
+ *    user-editable package allowlist (Phase 9).
+ *
+ * Allowlist persistence (Phase 9):
+ *  - Stored in SharedPreferences("expense_settings") key "allowlist" as a JSON array string.
+ *  - NotificationService reads the same prefs directly (no RN bridge) so the early-return
+ *    battery check stays bridge-free. After setAllowlist() writes, invalidateAllowlistCache()
+ *    is called so the service picks up the new set on the very next notification.
  *
  * New-Arch note (RULES.md §6): ReactContextBaseJavaModule + RCTDeviceEventEmitter is the
  * correct pattern under RN 0.86 New Architecture via the legacy interop layer.
@@ -35,6 +45,26 @@ class NotificationModule(private val reactContext: ReactApplicationContext) :
     override fun getName(): String = "NotificationModule"
 
     companion object {
+        private const val SETTINGS_PREFS = "expense_settings"
+        private const val ALLOWLIST_KEY  = "allowlist"
+
+        /**
+         * Human-readable labels for each package in DEFAULT_ALLOWLIST.
+         * Keyed by package name; shown in the Settings screen allowlist editor.
+         */
+        private val PACKAGE_LABELS: Map<String, String> = mapOf(
+            "com.google.android.apps.nbu.paisa.user" to "Google Pay",
+            "com.phonepe.app"                         to "PhonePe",
+            "net.one97.paytm"                         to "Paytm",
+            "com.snapwork.hdfc"                       to "HDFC",
+            "com.csam.icici.bank.imobile"             to "ICICI iMobile",
+            "com.sbi.lotusintouch"                    to "SBI YONO",
+            "com.sbi.SBIFreedomPlus"                  to "SBI YONO",
+            "com.axis.mobile"                         to "Axis Mobile",
+            "com.msf.kbank.mobile"                    to "Kotak",
+            "com.bankofbaroda.mconnect"               to "Bank of Baroda"
+        )
+
         /**
          * Nullable reference to the most-recently-constructed ReactApplicationContext.
          * Set on module construction; used by NotificationService to emit live events
@@ -92,6 +122,96 @@ class NotificationModule(private val reactContext: ReactApplicationContext) :
             reactContext.startActivity(intent)
         } catch (_: Exception) {
             // Settings screen unavailable on this device — ignore.
+        }
+    }
+
+    /**
+     * Resolve an array of {pkg, label} maps for every entry in DEFAULT_ALLOWLIST.
+     * The Settings screen uses this to show the built-in banking/UPI app list with
+     * friendly names so the user knows what each package represents.
+     *
+     * @param promise Resolves with WritableArray of WritableMap({pkg:String, label:String}).
+     */
+    @ReactMethod
+    fun getDefaultAllowlist(promise: Promise) {
+        try {
+            val result: WritableArray = Arguments.createArray()
+            for (pkg in NotificationService.DEFAULT_ALLOWLIST) {
+                val entry: WritableMap = Arguments.createMap().apply {
+                    putString("pkg", pkg)
+                    putString("label", PACKAGE_LABELS[pkg] ?: pkg)
+                }
+                result.pushMap(entry)
+            }
+            promise.resolve(result)
+        } catch (e: Exception) {
+            promise.reject("ERR_GET_DEFAULT_ALLOWLIST", e.message, e)
+        }
+    }
+
+    /**
+     * Read the currently active allowlist from SharedPreferences.
+     * If no user-defined list has been stored yet, resolves with the package names
+     * from DEFAULT_ALLOWLIST (same fallback used by NotificationService).
+     *
+     * @param promise Resolves with WritableArray<String> of package names.
+     */
+    @ReactMethod
+    fun getAllowlist(promise: Promise) {
+        try {
+            val prefs = reactContext.getSharedPreferences(SETTINGS_PREFS, ReactApplicationContext.MODE_PRIVATE)
+            val json = prefs.getString(ALLOWLIST_KEY, null)
+            val result: WritableArray = Arguments.createArray()
+            if (!json.isNullOrBlank()) {
+                try {
+                    val arr = JSONArray(json)
+                    for (i in 0 until arr.length()) {
+                        val pkg = arr.optString(i)
+                        if (pkg.isNotBlank()) result.pushString(pkg)
+                    }
+                } catch (_: Exception) {
+                    // Corrupt prefs — fall through to the default below.
+                    for (pkg in NotificationService.DEFAULT_ALLOWLIST) result.pushString(pkg)
+                }
+            } else {
+                for (pkg in NotificationService.DEFAULT_ALLOWLIST) result.pushString(pkg)
+            }
+            promise.resolve(result)
+        } catch (e: Exception) {
+            promise.reject("ERR_GET_ALLOWLIST", e.message, e)
+        }
+    }
+
+    /**
+     * Persist a new user-defined allowlist and invalidate the in-process service cache.
+     *
+     * Writes [packages] as a JSON array string to SharedPreferences("expense_settings")
+     * key "allowlist", then calls [NotificationService.invalidateAllowlistCache] so the
+     * service picks up the new set on the very next notification (no restart required).
+     *
+     * @param packages ReadableArray of package name strings chosen by the user.
+     * @param promise  Resolves with true on success.
+     */
+    @ReactMethod
+    fun setAllowlist(packages: ReadableArray, promise: Promise) {
+        try {
+            val arr = JSONArray()
+            for (i in 0 until packages.size()) {
+                val pkg = packages.getString(i)
+                if (!pkg.isNullOrBlank()) arr.put(pkg)
+            }
+            reactContext
+                .getSharedPreferences(SETTINGS_PREFS, ReactApplicationContext.MODE_PRIVATE)
+                .edit()
+                .putString(ALLOWLIST_KEY, arr.toString())
+                .apply()
+
+            // Invalidate the in-process cache so the next onNotificationPosted re-reads prefs.
+            NotificationService.invalidateAllowlistCache()
+
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ERR_SET_ALLOWLIST", e.message, e)
         }
     }
 
