@@ -15,6 +15,4 @@
 <full-backup-content>
     <include domain="database" path="." />
     <include domain="sharedpref" path="expense_settings.xml" />
-    <exclude domain="sharedpref" path="com.facebook.react.modules.network.ReactCookieJarContainer" />
-    <exclude domain="sharedpref" path="com.facebook.react.devsupport" />
 </full-backup-content>
