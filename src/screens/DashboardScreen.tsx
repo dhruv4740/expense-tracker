@@ -8,16 +8,23 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   DeviceEventEmitter,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RootStackParamList } from '../../App';
+import { isNotificationAccessGranted, openNotificationAccessSettings } from '../native/NotificationModule';
 import {
   getSummary,
   getTopMerchants,
   queryTransactions,
+  getAllAccountBalances,
+  getUncategorizedCount,
 } from '../db';
 import type { Summary, TransactionRow } from '../db';
 import { CATEGORY_META, CATEGORIES } from '../categories';
@@ -33,7 +40,7 @@ import {
   TrendChart,
 } from '../components';
 import { theme } from '../theme';
-import { monthRange } from '../dates';
+import { monthRange, prevMonthRange } from '../dates';
 import { computeBudgetStatus } from '../budgets';
 import type { BudgetStatus } from '../budgets';
 
@@ -41,16 +48,22 @@ import type { BudgetStatus } from '../budgets';
 
 interface DashboardData {
   summary: Summary;
+  prevSummary: Summary;
   topMerchant: { merchant: string; total: number; count: number } | null;
   biggestExpense: TransactionRow | null;
   budgetStatus: BudgetStatus;
+  balances: { account: string; balance: number; updatedAt: number }[];
+  monthLabel: string;
+  uncategorizedCount: number;
 }
 
 // ─── Data loader ──────────────────────────────────────────────────────────────
 
 function loadData(): DashboardData {
+  const now = new Date();
   const range = monthRange();
   const summary = getSummary(range);
+  const prevSummary = getSummary(prevMonthRange());
 
   const topMerchants = getTopMerchants(range, 1);
   const topMerchant = topMerchants[0] ?? null;
@@ -62,27 +75,56 @@ function loadData(): DashboardData {
       : null;
 
   const budgetStatus = computeBudgetStatus();
+  const balances = getAllAccountBalances();
+  const uncategorizedCount = getUncategorizedCount();
 
-  return { summary, topMerchant, biggestExpense, budgetStatus };
+  const monthLabel = now.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+
+  return { summary, prevSummary, topMerchant, biggestExpense, budgetStatus, balances, monthLabel, uncategorizedCount };
 }
 
 // ─── Screen ──────────────────────────────────────────────────────────────────
 
 export default function DashboardScreen() {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const [data, setData] = useState<DashboardData>(() => loadData());
+  const [refreshing, setRefreshing] = useState(false);
+  const [notifHealthOk, setNotifHealthOk] = useState(true);
 
   const reload = useCallback(() => {
     setData(loadData());
   }, []);
 
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    setData(loadData());
+    setRefreshing(false);
+  }, []);
+
   useFocusEffect(reload);
+
+  useFocusEffect(
+    useCallback(() => {
+      isNotificationAccessGranted()
+        .then(ok => setNotifHealthOk(ok))
+        .catch(() => setNotifHealthOk(true)); // assume ok if check fails
+    }, []),
+  );
 
   useEffect(() => {
     const sub = DeviceEventEmitter.addListener(DATA_CHANGED, reload);
     return () => sub.remove();
   }, [reload]);
 
-  const { summary, topMerchant, biggestExpense, budgetStatus } = data;
+  const { summary, prevSummary, topMerchant, biggestExpense, budgetStatus, balances, monthLabel, uncategorizedCount } = data;
+
+  // ── Month-over-month deltas ────────────────────────────────────────────────
+  const spentDelta = prevSummary.spent > 0
+    ? ((summary.spent - prevSummary.spent) / prevSummary.spent) * 100
+    : null;
+  const receivedDelta = prevSummary.received > 0
+    ? ((summary.received - prevSummary.received) / prevSummary.received) * 100
+    : null;
 
   // ── Donut data ──────────────────────────────────────────────────────────────
   const donutData = summary.byCategory
@@ -119,19 +161,65 @@ export default function DashboardScreen() {
       style={styles.container}
       contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          tintColor={theme.colors.accent}
+          colors={[theme.colors.accent]}
+        />
+      }
     >
+      {/* ── Capture-health banner ── */}
+      {!notifHealthOk && (
+        <TouchableOpacity
+          style={styles.healthBanner}
+          onPress={openNotificationAccessSettings}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.healthBannerText}>
+            ⚠️ Notification access revoked — UPI/bank app transactions won't be captured
+          </Text>
+          <Text style={styles.healthBannerAction}>Fix →</Text>
+        </TouchableOpacity>
+      )}
+
+      {/* ── Uncategorized review banner ── */}
+      {uncategorizedCount > 0 && (
+        <TouchableOpacity
+          style={styles.reviewBanner}
+          onPress={() => navigation.navigate('Review')}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.reviewBannerText}>
+            {uncategorizedCount} transaction{uncategorizedCount !== 1 ? 's' : ''} need categorizing
+          </Text>
+          <Text style={styles.reviewBannerAction}>Review →</Text>
+        </TouchableOpacity>
+      )}
+
       {/* ── Hero card ── */}
       <Card style={styles.heroCard}>
-        <Text style={styles.heroTitle}>This Month</Text>
+        <Text style={styles.heroTitle}>{monthLabel}</Text>
         <View style={styles.heroRow}>
           <View style={styles.heroItem}>
             <Text style={styles.heroLabel}>Spent</Text>
             <AmountText amount={summary.spent} type="expense" size={theme.font.size.xl} />
+            {spentDelta != null && (
+              <Text style={[styles.delta, spentDelta > 0 ? styles.deltaUp : styles.deltaDown]}>
+                {spentDelta > 0 ? '▲' : '▼'} {Math.abs(spentDelta).toFixed(0)}% vs last mo
+              </Text>
+            )}
           </View>
           <View style={styles.heroSep} />
           <View style={styles.heroItem}>
             <Text style={styles.heroLabel}>Received</Text>
             <AmountText amount={summary.received} type="income" size={theme.font.size.xl} />
+            {receivedDelta != null && (
+              <Text style={[styles.delta, receivedDelta >= 0 ? styles.deltaDown : styles.deltaUp]}>
+                {receivedDelta >= 0 ? '▲' : '▼'} {Math.abs(receivedDelta).toFixed(0)}% vs last mo
+              </Text>
+            )}
           </View>
           <View style={styles.heroSep} />
           <View style={styles.heroItem}>
@@ -240,6 +328,35 @@ export default function DashboardScreen() {
         </>
       )}
 
+      {/* ── Account balances (last-known from SMS) ── */}
+      {balances.length > 0 && (
+        <>
+          <SectionHeader title="Last Known Balances" />
+          <Card>
+            {balances.map(b => (
+              <View key={b.account} style={styles.balanceRow}>
+                <Text style={styles.balanceAccount}>
+                  {b.account.length <= 4 ? `A/c ••••${b.account}` : b.account}
+                </Text>
+                <View style={styles.balanceRight}>
+                  <Text style={styles.balanceAmt}>
+                    ₹{b.balance.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                  </Text>
+                  <Text style={styles.balanceSub}>
+                    {new Date(b.updatedAt).toLocaleDateString('en-IN', {
+                      day: 'numeric', month: 'short',
+                    })}
+                  </Text>
+                </View>
+              </View>
+            ))}
+            <Text style={styles.balanceDisclaimer}>
+              Best-effort · from SMS "Avl Bal" · not real-time
+            </Text>
+          </Card>
+        </>
+      )}
+
       {/* ── Quick insights ── */}
       <SectionHeader title="Quick Insights" />
       <Card>
@@ -291,6 +408,52 @@ const styles = StyleSheet.create({
   content: {
     paddingBottom: theme.spacing.xxl,
   },
+  healthBanner: {
+    marginHorizontal: theme.spacing.lg,
+    marginTop: theme.spacing.md,
+    backgroundColor: theme.colors.warning + '18',
+    borderLeftWidth: 3,
+    borderLeftColor: theme.colors.warning,
+    borderRadius: theme.radius.sm,
+    padding: theme.spacing.md,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  healthBannerText: {
+    color: theme.colors.textSecondary,
+    fontSize: theme.font.size.xs,
+    flex: 1,
+    lineHeight: 16,
+  },
+  healthBannerAction: {
+    color: theme.colors.warning,
+    fontWeight: theme.font.weight.bold,
+    fontSize: theme.font.size.sm,
+    marginLeft: theme.spacing.sm,
+  },
+  reviewBanner: {
+    marginHorizontal: theme.spacing.lg,
+    marginTop: theme.spacing.md,
+    backgroundColor: theme.colors.accent + '18',
+    borderLeftWidth: 3,
+    borderLeftColor: theme.colors.accent,
+    borderRadius: theme.radius.sm,
+    padding: theme.spacing.md,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  reviewBannerText: {
+    color: theme.colors.textSecondary,
+    fontSize: theme.font.size.sm,
+    flex: 1,
+  },
+  reviewBannerAction: {
+    color: theme.colors.accent,
+    fontWeight: theme.font.weight.bold,
+    fontSize: theme.font.size.sm,
+  },
   heroCard: {
     margin: theme.spacing.lg,
     marginBottom: 0,
@@ -314,6 +477,17 @@ const styles = StyleSheet.create({
     fontSize: theme.font.size.xs,
     color: theme.colors.textSecondary,
     marginBottom: theme.spacing.xs,
+  },
+  delta: {
+    fontSize: 9,
+    marginTop: 2,
+    textAlign: 'center',
+  },
+  deltaUp: {
+    color: theme.colors.danger,
+  },
+  deltaDown: {
+    color: theme.colors.credit,
   },
   heroSep: {
     width: 1,
@@ -410,6 +584,39 @@ const styles = StyleSheet.create({
   insightSub: {
     fontSize: theme.font.size.xs,
     color: theme.colors.textMuted,
+  },
+  balanceRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: theme.spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+  },
+  balanceAccount: {
+    fontSize: theme.font.size.sm,
+    color: theme.colors.textSecondary,
+    fontWeight: theme.font.weight.medium,
+  },
+  balanceRight: {
+    alignItems: 'flex-end',
+    gap: 2,
+  },
+  balanceAmt: {
+    fontSize: theme.font.size.md,
+    color: theme.colors.credit,
+    fontWeight: theme.font.weight.semibold,
+  },
+  balanceSub: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textMuted,
+  },
+  balanceDisclaimer: {
+    fontSize: 9,
+    color: theme.colors.textMuted,
+    marginTop: theme.spacing.sm,
+    textAlign: 'center',
+    fontStyle: 'italic',
   },
   bottomPad: {
     height: theme.spacing.xxl,

@@ -1,3 +1,7 @@
 <resources>
-    <string name="app_name">ExpenseTracker</string>
+    <!-- app_name is overridden per build type via resValue in build.gradle:
+         debug  → "Expense (Debug)"   (com.expensetracker.debug — never overwrites release)
+         release → "Expense Tracker"  (com.expensetracker)
+         This entry is a fallback only; it should never be used directly. -->
+    <string name="app_name">Expense Tracker</string>
 </resources>

@@ -109,13 +109,25 @@ Input: `(sender: string, body: string)`. Output: `Transaction | null` (null when
 - Toolchain: Node 22, JDK 21, Android SDK at `C:/Users/hp/AppData/Local/Android/Sdk` (see `android/local.properties`, gitignored). `ANDROID_HOME` is unset in shell → call `adb`/`emulator` by full path.
 
 ### Build variants — read this before shipping anything to the phone
-- **Ship `assembleRelease`, NOT `assembleDebug`.** This is a sideloaded standalone app — the user just installs it and uses it, with no laptop/Metro/dev server in the loop.
-  - **Debug APK is NOT standalone.** It does not contain the JS bundle; at launch it fetches it from the Metro dev server (`localhost:8081`) over USB/Wi-Fi. Off the dev machine it shows the red "unable to load script / Reload" bundler-error screen. Debug is for `npx react-native run-android` during development ONLY.
-  - **Release APK is standalone.** `react.debuggableVariants` excludes `release`, so the JS is bundled + Hermes-compiled into the APK. Runs fully offline.
-- Build the deliverable: `cd android && ./gradlew assembleRelease` → `android/app/build/outputs/apk/release/app-release.apk`.
-- Signing: `release` uses the `debug` keystore on purpose (`signingConfigs.debug`) — fine for personal sideloading, and it's the SAME key as the debug variant, so a release APK installs/updates over a previously-installed debug build without uninstall. (For a "real" release you'd generate your own keystore; not needed here.)
-- `minifyEnabled` is currently **false** (`enableProguardInReleaseBuilds=false`) → no R8 stripping risk for the Kotlin native modules. If you later turn ProGuard on, verify `SmsModule`/`NotificationModule`/`NotificationService`/op-sqlite survive.
-- Install to phone: `adb install -r android/app/build/outputs/apk/release/app-release.apk` (or copy the APK over and tap it).
+
+> ⚠️ **NEVER install the debug APK on the physical phone.** Debug is for emulators and development only.
+
+Two separate packages:
+| Variant | Package ID | App label | Standalone? |
+|---|---|---|---|
+| **release** | `com.expensetracker` | Expense Tracker | ✅ (JS bundle baked in) |
+| **debug** | `com.expensetracker.debug` | Expense (Debug) | ❌ (fetches JS from Metro) |
+
+They have **different package IDs** — a debug install cannot overwrite or interfere with the release app in any way. If the red "unable to load script / Reload" screen appears, you installed the debug build. Uninstall `com.expensetracker.debug` (not `.release`) and it won't affect your data.
+
+- **Debug APK** (`assembleDebug` / `npx react-native run-android` / IDE Run button): fetches the JS bundle from the Metro dev server (`localhost:8081`). Works only while Metro is running on the dev machine, over USB or Wi-Fi ADB. Shows the Metro error screen on a real phone away from the dev machine. Use only on emulators or a dedicated dev device.
+- **Release APK** (`assembleRelease`): JS is bundled + Hermes-compiled into the APK. Runs fully offline. This is the only variant to install on the real phone.
+
+Build command: `cd android && ./gradlew assembleRelease` → `android/app/build/outputs/apk/release/app-release.apk`
+
+Signing: both variants use the same `debug` keystore (`signingConfigs.debug`) so a new release APK can be installed with `adb install -r` (replace-in-place) without losing data. The `-r` flag is important — it preserves app data across updates.
+
+`minifyEnabled` is currently **false** (`enableProguardInReleaseBuilds=false`) → no R8 stripping risk for the Kotlin native modules.
 
 ---
 

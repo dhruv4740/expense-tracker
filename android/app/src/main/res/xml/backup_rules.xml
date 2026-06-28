@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android Auto Backup + Data Extraction rules.
+  Included by both android:dataExtractionRules (API 31+) and
+  android:fullBackupContent (API 23-30) in AndroidManifest.xml.
+
+  We back up:
+    - databases/ (op-sqlite stores expenses.db here — all transaction data)
+    - shared_prefs/expense_settings.xml (notification allowlist, identity, budgets)
+
+  We exclude:
+    - shared_prefs/com.facebook.* (React Native internal prefs — recreated at runtime)
+    - Everything else is transient / recreatable.
+-->
+<full-backup-content>
+    <include domain="database" path="." />
+    <include domain="sharedpref" path="expense_settings.xml" />
+    <exclude domain="sharedpref" path="com.facebook.react.modules.network.ReactCookieJarContainer" />
+    <exclude domain="sharedpref" path="com.facebook.react.devsupport" />
+</full-backup-content>

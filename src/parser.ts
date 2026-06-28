@@ -17,6 +17,11 @@ export interface ParsedTransaction {
   /** Transaction amount in INR (commas removed). */
   amount: number;
   /**
+   * Last-known available balance, if present in the message ("Avl Bal", "Available
+   * Balance", "Bal:"). null if not found. Best-effort — display as "last seen" only.
+   */
+  balance?: number;
+  /**
    * Cleaned merchant name extracted from "at / to / towards" clauses.
    * null if extraction fails or produces empty text; sync.ts falls back to
    * counterparty then sender.
@@ -87,6 +92,13 @@ const USER_ACCT_RE =
 /** Trailing noise to strip from merchant strings. */
 const MERCHANT_NOISE_RE =
   /\s+(on\s+\d{1,2}[-/]\w+[-/]\w+|ref\w*[:\s]+\S+|avl\s*bal\w*.*|a\/c\s*\w+|\bacct\b.*|\baccount\b.*)/i;
+
+/**
+ * Available balance from bank SMS: "Avl Bal: Rs.5,000.00", "Avl Bal INR 1234.56",
+ * "Available Balance: ₹12000", "Bal: Rs.500".
+ */
+const BALANCE_RE =
+  /(?:avl\.?\s*bal(?:ance)?|available\s+balance|bal)\s*[:\s]*(?:rs\.?|₹|inr)?\s*([\d,]+(?:\.\d{1,2})?)/i;
 
 // ─── Main export ──────────────────────────────────────────────────────────────
 
@@ -165,6 +177,12 @@ export function parseTransaction(
     merchant = raw || null;
   }
 
+  // ── 6. Available balance (optional, best-effort) ────────────────────────────
+  const balanceMatch = body.match(BALANCE_RE);
+  const balance = balanceMatch
+    ? parseFloat(balanceMatch[1].replace(/,/g, ''))
+    : undefined;
+
   return {
     amount,
     merchant,
@@ -174,5 +192,6 @@ export function parseTransaction(
     account,
     timestamp: ts,
     raw_text: body,
+    ...(balance != null && !isNaN(balance) ? { balance } : {}),
   };
 }

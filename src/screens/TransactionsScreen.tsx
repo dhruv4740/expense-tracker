@@ -14,6 +14,7 @@ import {
   Alert,
   DeviceEventEmitter,
   Modal,
+  RefreshControl,
   SectionList,
   StyleSheet,
   Switch,
@@ -57,6 +58,8 @@ interface FilterState {
   selectedCategories: string[];
   selectedTypes: TransactionType[];
   showSelf: boolean;
+  amountMin: string;
+  amountMax: string;
 }
 
 interface Props {
@@ -85,9 +88,16 @@ const TxRow = React.memo(function TxRow({
     >
       <CategoryChip category={item.category} small />
       <View style={styles.rowMid}>
-        <Text style={styles.merchant} numberOfLines={1}>
-          {displayName}
-        </Text>
+        <View style={styles.merchantRow}>
+          <Text style={styles.merchant} numberOfLines={1}>
+            {displayName}
+          </Text>
+          {item.type === 'self' && (
+            <View style={styles.selfBadge}>
+              <Text style={styles.selfBadgeText}>Self</Text>
+            </View>
+          )}
+        </View>
         <Text style={styles.rowSub} numberOfLines={1}>
           {formatDate(item.timestamp)}
         </Text>
@@ -248,6 +258,27 @@ const FilterModal = React.memo(function FilterModal({
             />
           </View>
 
+          <Text style={fStyles.sectionLabel}>Amount Range (₹)</Text>
+          <View style={fStyles.amountRow}>
+            <TextInput
+              style={fStyles.amountInput}
+              placeholder="Min"
+              placeholderTextColor={theme.colors.textMuted}
+              keyboardType="numeric"
+              value={local.amountMin}
+              onChangeText={v => setLocal(prev => ({ ...prev, amountMin: v }))}
+            />
+            <Text style={fStyles.amountSep}>–</Text>
+            <TextInput
+              style={fStyles.amountInput}
+              placeholder="Max"
+              placeholderTextColor={theme.colors.textMuted}
+              keyboardType="numeric"
+              value={local.amountMax}
+              onChangeText={v => setLocal(prev => ({ ...prev, amountMax: v }))}
+            />
+          </View>
+
           <View style={fStyles.actions}>
             <TouchableOpacity
               style={fStyles.resetBtn}
@@ -257,7 +288,9 @@ const FilterModal = React.memo(function FilterModal({
                   datePreset: 'month',
                   selectedCategories: [],
                   selectedTypes: [],
-                  showSelf: false,
+                  showSelf: true,
+                  amountMin: '',
+                  amountMax: '',
                 })
               }
             >
@@ -299,6 +332,9 @@ function buildFilters(f: FilterState): TransactionFilters {
     to = r.to;
   }
 
+  const amountMinNum = parseFloat(f.amountMin);
+  const amountMaxNum = parseFloat(f.amountMax);
+
   return {
     from,
     to: to ?? now,
@@ -307,6 +343,8 @@ function buildFilters(f: FilterState): TransactionFilters {
     types: f.selectedTypes.length > 0 ? f.selectedTypes : undefined,
     search: f.search.trim() || undefined,
     includeSelf: f.showSelf,
+    amountMin: !isNaN(amountMinNum) ? amountMinNum : undefined,
+    amountMax: !isNaN(amountMaxNum) ? amountMaxNum : undefined,
   };
 }
 
@@ -315,7 +353,9 @@ const DEFAULT_FILTER: FilterState = {
   datePreset: 'month',
   selectedCategories: [],
   selectedTypes: [],
-  showSelf: false,
+  showSelf: true,
+  amountMin: '',
+  amountMax: '',
 };
 
 // ─── Screen ──────────────────────────────────────────────────────────────────
@@ -324,7 +364,15 @@ export default function TransactionsScreen({ navigation }: Props) {
   const [filter, setFilter] = useState<FilterState>(DEFAULT_FILTER);
   const [sections, setSections] = useState<Section[]>([]);
   const [showFilter, setShowFilter] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    const rows = queryTransactions(buildFilters(filter));
+    setSections(groupByDay(rows));
+    setRefreshing(false);
+  }, [filter]);
 
   const load = useCallback((f: FilterState) => {
     const rows = queryTransactions(buildFilters(f));
@@ -459,6 +507,14 @@ export default function TransactionsScreen({ navigation }: Props) {
         contentContainerStyle={
           sections.length === 0 ? styles.emptyContainer : styles.listContent
         }
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={theme.colors.accent}
+            colors={[theme.colors.accent]}
+          />
+        }
       />
 
       <Fab onPress={() => navigation.navigate('EditTransaction', {})} />
@@ -519,10 +575,27 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 2,
   },
+  merchantRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+  },
   merchant: {
+    flex: 1,
     fontSize: theme.font.size.md,
     fontWeight: theme.font.weight.medium,
     color: theme.colors.textPrimary,
+  },
+  selfBadge: {
+    backgroundColor: theme.colors.self + '33',
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+  },
+  selfBadgeText: {
+    fontSize: 9,
+    color: theme.colors.self,
+    fontWeight: theme.font.weight.bold,
   },
   rowSub: {
     fontSize: theme.font.size.xs,
@@ -624,5 +697,23 @@ const fStyles = StyleSheet.create({
   applyText: {
     color: '#000',
     fontWeight: theme.font.weight.bold,
+  },
+  amountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.md,
+  },
+  amountInput: {
+    flex: 1,
+    backgroundColor: theme.colors.surfaceAlt,
+    borderRadius: theme.radius.sm,
+    padding: theme.spacing.sm,
+    color: theme.colors.textPrimary,
+    fontSize: theme.font.size.sm,
+  },
+  amountSep: {
+    color: theme.colors.textMuted,
+    fontSize: theme.font.size.md,
   },
 });

@@ -32,6 +32,7 @@ import TransactionsScreen from './src/screens/TransactionsScreen';
 import InsightsScreen from './src/screens/InsightsScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import EditTransactionScreen from './src/screens/EditTransactionScreen';
+import ReviewScreen from './src/screens/ReviewScreen';
 
 // Enable native screen containers for React Navigation (reduces overdraw and
 // improves gesture performance on Android).
@@ -45,6 +46,7 @@ initDb();
 export type RootStackParamList = {
   Tabs: undefined;
   EditTransaction: { tx?: TransactionRow };
+  Review: undefined;
 };
 
 type RootTabParamList = {
@@ -207,6 +209,21 @@ export default function App() {
               },
               headerTintColor: theme.colors.accent,
             })}
+          />
+          <Stack.Screen
+            name="Review"
+            component={ReviewScreen}
+            options={{
+              headerShown: true,
+              title: 'Categorize Transactions',
+              presentation: 'modal',
+              headerStyle: { backgroundColor: theme.colors.bg },
+              headerTitleStyle: {
+                color: theme.colors.textPrimary,
+                fontWeight: theme.font.weight.semibold,
+              },
+              headerTintColor: theme.colors.accent,
+            }}
           />
         </Stack.Navigator>
       </NavigationContainer>

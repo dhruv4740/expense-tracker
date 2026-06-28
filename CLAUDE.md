@@ -52,3 +52,10 @@ categories: Food, Transport, Shopping, Bills, UPI, Other (auto-assign by keyword
 - **Battery is the primary constraint** — no wake locks, no polling, no background JS, no foreground service (see RULES.md)
 - **Commit after every change** (local only; no remote configured yet)
 - See **RULES.md** for the full engineering contract (EventBuffer shape, parser/db details, build env)
+
+## ⚠️ Build / install rule (read before touching the phone)
+**NEVER install the debug APK (`assembleDebug` / `run-android`) on the physical phone.**
+- Debug = `com.expensetracker.debug`, shows Metro "unable to load script" error without a running dev server.
+- Release = `com.expensetracker`, fully standalone (no Metro needed).
+- The two packages are SEPARATE — installing debug does NOT touch the release app or its data.
+- Only command to push to the real phone: `cd android && ./gradlew assembleRelease` then `adb install -r .../app-release.apk`

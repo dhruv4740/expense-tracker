@@ -17,7 +17,7 @@ import { DeviceEventEmitter } from 'react-native';
 import { drainBuffer, onSmsReceived, type RawEvent } from './native/SmsModule';
 import { onNotificationReceived } from './native/NotificationModule';
 import { parseTransaction } from './parser';
-import { insertTransaction, getAllMerchantRules } from './db';
+import { insertTransaction, getAllMerchantRules, setAccountBalance } from './db';
 import { categorize } from './categories';
 import type { Category } from './categories';
 import { isSelfTransfer } from './identity';
@@ -93,7 +93,14 @@ function processOne(e: RawEvent): boolean {
   // 4. Merchant fallback chain: parser merchant → counterparty → sender.
   const merchant = parsed.merchant ?? parsed.counterparty ?? sender ?? null;
 
-  // 5. Insert (idempotent via dedup_key + cross-channel dedup in db.ts).
+  // 5. Store available balance if the message included one (best-effort, no wake lock,
+  //    runs only while the app is foregrounded or while draining the buffer on open).
+  if (parsed.balance != null && !isNaN(parsed.balance)) {
+    const accountKey = parsed.account ?? parsed.source ?? 'unknown';
+    setAccountBalance(accountKey, parsed.balance, parsed.timestamp);
+  }
+
+  // 6. Insert (idempotent via dedup_key + cross-channel dedup in db.ts).
   return insertTransaction({
     amount: parsed.amount,
     merchant,

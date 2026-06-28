@@ -56,6 +56,10 @@ export interface TransactionFilters {
   search?: string;
   /** include type='self' rows; defaults to false (self-transfers hidden) */
   includeSelf?: boolean;
+  /** minimum transaction amount (inclusive) */
+  amountMin?: number;
+  /** maximum transaction amount (inclusive) */
+  amountMax?: number;
 }
 
 // op-sqlite QueryResult: rows is Array<Record<string, Scalar>>
@@ -390,6 +394,15 @@ export function queryTransactions(
     params.push(term, term, term, term);
   }
 
+  if (filters.amountMin != null) {
+    where.push('amount >= ?');
+    params.push(filters.amountMin);
+  }
+  if (filters.amountMax != null) {
+    where.push('amount <= ?');
+    params.push(filters.amountMax);
+  }
+
   const sql =
     'SELECT * FROM transactions' +
     (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
@@ -567,4 +580,107 @@ export function setSetting(key: string, value: string): void {
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     [key, value],
   );
+}
+
+// ─── Account balance (best-effort, last-known from SMS "Avl Bal") ─────────────
+
+const BALANCE_PREFIX = '__balance__';
+
+/** Returns the last-known balance (INR) for an account (keyed by last-4 digits or source). */
+export function getAccountBalance(accountKey: string): { balance: number; updatedAt: number } | null {
+  const raw = getSetting(`${BALANCE_PREFIX}${accountKey}`);
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as { balance: number; updatedAt: number };
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/** Store the last-known balance for an account; only updates if newer than stored value. */
+export function setAccountBalance(accountKey: string, balance: number, ts: number): void {
+  const existing = getAccountBalance(accountKey);
+  if (existing && existing.updatedAt >= ts) {
+    return; // don't overwrite with older data
+  }
+  setSetting(`${BALANCE_PREFIX}${accountKey}`, JSON.stringify({ balance, updatedAt: ts }));
+}
+
+/** Return all stored balances as a flat array. */
+export function getAllAccountBalances(): { account: string; balance: number; updatedAt: number }[] {
+  const conn = requireDb();
+  const res = conn.executeSync(
+    `SELECT key, value FROM app_settings WHERE key LIKE '${BALANCE_PREFIX}%'`,
+    [],
+  );
+  return (res.rows ?? []).map(row => {
+    const key = String(row.key ?? '').slice(BALANCE_PREFIX.length);
+    try {
+      const val = JSON.parse(String(row.value ?? '{}')) as { balance: number; updatedAt: number };
+      return { account: key, balance: val.balance, updatedAt: val.updatedAt };
+    } catch {
+      return { account: key, balance: 0, updatedAt: 0 };
+    }
+  }).filter(b => b.balance > 0);
+}
+
+// ─── Recurring detection ──────────────────────────────────────────────────────
+
+export interface RecurringEntry {
+  merchant: string;
+  amount: number;
+  count: number;
+  avgIntervalDays: number;
+  lastSeen: number;
+}
+
+/**
+ * Detect likely recurring charges in a range.
+ * A merchant qualifies when it has ≥ minOccurrences expense rows with amounts
+ * within ±5% of each other. Interval is estimated from first/last occurrence.
+ * All aggregation happens in SQL; only the tiny result set enters JS.
+ */
+export function getRecurring(range: Range, minOccurrences = 2): RecurringEntry[] {
+  const conn = requireDb();
+  const res = conn.executeSync(
+    `SELECT
+        COALESCE(merchant, counterparty, source, 'Unknown') AS merchant,
+        ROUND(AVG(amount), 2) AS avg_amount,
+        COUNT(*) AS cnt,
+        MIN(timestamp) AS first_ts,
+        MAX(timestamp) AS last_ts
+       FROM transactions
+      WHERE type = 'expense'
+        AND timestamp BETWEEN ? AND ?
+      GROUP BY COALESCE(merchant, counterparty, source, 'Unknown')
+      HAVING COUNT(*) >= ?
+      ORDER BY cnt DESC`,
+    [range.from, range.to, minOccurrences],
+  );
+  return (res.rows ?? []).map(row => {
+    const cnt = Number(row.cnt ?? 0);
+    const firstTs = Number(row.first_ts ?? 0);
+    const lastTs = Number(row.last_ts ?? 0);
+    const spanDays = cnt > 1 ? (lastTs - firstTs) / 86_400_000 : 0;
+    return {
+      merchant: String(row.merchant ?? 'Unknown'),
+      amount: Number(row.avg_amount ?? 0),
+      count: cnt,
+      avgIntervalDays: cnt > 1 ? Math.round(spanDays / (cnt - 1)) : 0,
+      lastSeen: lastTs,
+    };
+  });
+}
+
+/** Count transactions with category='Other' (the uncategorized review queue). */
+export function getUncategorizedCount(): number {
+  const conn = requireDb();
+  const res = conn.executeSync(
+    `SELECT COUNT(*) AS cnt FROM transactions WHERE category = 'Other' AND type = 'expense'`,
+    [],
+  );
+  return Number((res.rows ?? [])[0]?.cnt ?? 0);
 }

@@ -19,9 +19,9 @@ import { useFocusEffect } from '@react-navigation/native';
 import {
   getSummary,
   getTopMerchants,
-  queryTransactions,
+  getRecurring,
 } from '../db';
-import type { Summary, TransactionRow } from '../db';
+import type { Summary, RecurringEntry } from '../db';
 import { CATEGORY_META, CATEGORIES } from '../categories';
 import type { Category } from '../categories';
 import { DATA_CHANGED } from '../sync';
@@ -68,6 +68,7 @@ interface InsightData {
   summary: Summary;
   topMerchants: { merchant: string; total: number; count: number }[];
   frequent: { merchant: string; total: number; count: number }[];
+  recurring: RecurringEntry[];
 }
 
 function loadData(rangeKey: RangeKey): InsightData {
@@ -78,7 +79,11 @@ function loadData(rangeKey: RangeKey): InsightData {
   // Frequent merchants: >=3 transactions in range (derived from topMerchants data)
   const frequent = topMerchants.filter(m => m.count >= 3);
 
-  return { summary, topMerchants: topMerchants.slice(0, 5), frequent };
+  // Recurring: use last-3-months range for better detection regardless of current selector
+  const recurringRange = rangeKey === '3months' ? range : getRange('3months');
+  const recurring = getRecurring(recurringRange, 2);
+
+  return { summary, topMerchants: topMerchants.slice(0, 5), frequent, recurring };
 }
 
 // ─── Screen ──────────────────────────────────────────────────────────────────
@@ -109,7 +114,7 @@ export default function InsightsScreen() {
     reload(key);
   }
 
-  const { summary, topMerchants, frequent } = data;
+  const { summary, topMerchants, frequent, recurring } = data;
 
   // ── Donut data ──────────────────────────────────────────────────────────────
   const donutData = summary.byCategory
@@ -255,6 +260,35 @@ export default function InsightsScreen() {
         </>
       )}
 
+      {/* ── Recurring & subscriptions ── */}
+      {recurring.length > 0 && (
+        <>
+          <SectionHeader title="Recurring & Subscriptions" />
+          <Card>
+            {recurring.map((r, i) => (
+              <View key={`rec-${r.merchant}-${i}`} style={styles.merchantRow}>
+                <View style={styles.recurringTag}>
+                  <Text style={styles.recurringTagText}>↺</Text>
+                </View>
+                <Text style={styles.merchantName} numberOfLines={1}>
+                  {r.merchant}
+                </Text>
+                <View style={styles.merchantRight}>
+                  <Text style={styles.merchantCount}>
+                    {r.count}× · ~{r.avgIntervalDays}d
+                  </Text>
+                  <AmountText
+                    amount={r.amount}
+                    type="expense"
+                    size={theme.font.size.sm}
+                  />
+                </View>
+              </View>
+            ))}
+          </Card>
+        </>
+      )}
+
       <View style={styles.bottomPad} />
     </ScrollView>
   );
@@ -347,6 +381,19 @@ const styles = StyleSheet.create({
   merchantCount: {
     fontSize: theme.font.size.xs,
     color: theme.colors.textMuted,
+  },
+  recurringTag: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: theme.colors.accent + '22',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recurringTagText: {
+    fontSize: 12,
+    color: theme.colors.accent,
+    fontWeight: theme.font.weight.bold,
   },
   bottomPad: {
     height: theme.spacing.xxl,
