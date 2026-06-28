@@ -72,6 +72,7 @@ export default function ReviewScreen() {
               tx.merchant ?? tx.counterparty ?? tx.source ?? '',
               tx.counterparty ?? '',
             );
+            if (!merchantKey) { return; }
             upsertMerchantRule(merchantKey, cat);
             // Bulk update all past "Other" rows with same merchant/counterparty
             const toUpdate = queryTransactions({
@@ -204,8 +205,8 @@ const styles = StyleSheet.create({
   },
   sheet: {
     backgroundColor: theme.colors.surface,
-    borderTopLeftRadius: theme.radius.xl,
-    borderTopRightRadius: theme.radius.xl,
+    borderTopLeftRadius: theme.radius.lg,
+    borderTopRightRadius: theme.radius.lg,
     padding: theme.spacing.lg,
     paddingBottom: 40,
     maxHeight: '75%',

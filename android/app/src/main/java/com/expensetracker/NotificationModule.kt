@@ -2,6 +2,7 @@ package com.expensetracker
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.provider.Settings
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
@@ -213,6 +214,54 @@ class NotificationModule(private val reactContext: ReactApplicationContext) :
             promise.resolve(true)
         } catch (e: Exception) {
             promise.reject("ERR_SET_ALLOWLIST", e.message, e)
+        }
+    }
+
+    /**
+     * Return all user-facing (LAUNCHER) apps installed on the device, with a flag
+     * indicating whether each is likely a banking/UPI app. Uses the PackageManager
+     * API (requires the <queries> intent-filter in AndroidManifest.xml on API 30+).
+     *
+     * Resolves with WritableArray<{pkg:String, label:String, isLikelyBank:Boolean}>.
+     * Runs on the calling thread (React Native bridge thread) — result set is small
+     * (typically <100 apps) so no async dispatch is needed.
+     */
+    @ReactMethod
+    fun getInstalledApps(promise: Promise) {
+        try {
+            val pm = reactContext.packageManager
+            val launcherIntent = Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+            }
+            @Suppress("QueryPermissionsNeeded")
+            val resolveInfoList = pm.queryIntentActivities(launcherIntent, PackageManager.MATCH_DEFAULT_ONLY)
+
+            val bankKeywords = setOf("bank", "pay", "upi", "wallet", "money", "hdfc", "icici", "sbi",
+                "axis", "kotak", "paytm", "phonepe", "gpay", "bhim", "freecharge", "mobikwik",
+                "amazon", "flipkart", "cred", "slice", "jupiter", "fi", "navi", "niyo")
+
+            val result: WritableArray = Arguments.createArray()
+            for (ri in resolveInfoList) {
+                val pkg = ri.activityInfo.packageName ?: continue
+                if (pkg == reactContext.packageName) continue // skip ourselves
+
+                val label = ri.loadLabel(pm).toString()
+                val labelLower = label.lowercase()
+                val pkgLower = pkg.lowercase()
+                val isLikelyBank = pkg in NotificationService.DEFAULT_ALLOWLIST ||
+                    bankKeywords.any { kw -> labelLower.contains(kw) || pkgLower.contains(kw) }
+
+                val entry: WritableMap = Arguments.createMap().apply {
+                    putString("pkg", pkg)
+                    putString("label", label)
+                    putBoolean("isLikelyBank", isLikelyBank)
+                }
+                result.pushMap(entry)
+            }
+
+            promise.resolve(result)
+        } catch (e: Exception) {
+            promise.reject("ERR_GET_INSTALLED_APPS", e.message, e)
         }
     }
 

@@ -6,6 +6,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
+  Modal,
+  FlatList,
   ScrollView,
   StyleSheet,
   Switch,
@@ -32,10 +34,11 @@ import { DeviceEventEmitter } from 'react-native';
 import {
   isNotificationAccessGranted,
   openNotificationAccessSettings,
-  getDefaultAllowlist,
   getAllowlist,
   setAllowlist,
+  getInstalledApps,
 } from '../native/NotificationModule';
+import type { InstalledApp } from '../native/NotificationModule';
 import { exportCsv, exportJson, restoreFromJson } from '../export';
 import { Card, SectionHeader, Icon } from '../components';
 import { theme } from '../theme';
@@ -46,6 +49,7 @@ interface AllowlistEntry {
   pkg: string;
   label: string;
   enabled: boolean;
+  isLikelyBank: boolean;
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -114,6 +118,8 @@ export default function SettingsScreen() {
 
   // ── Notification allowlist ───────────────────────────────────────────────────
   const [allowlist, setAllowlistState] = useState<AllowlistEntry[]>([]);
+  const [showAppPicker, setShowAppPicker] = useState(false);
+  const [allInstalledApps, setAllInstalledApps] = useState<InstalledApp[]>([]);
 
   // ── Permissions ─────────────────────────────────────────────────────────────
   const [notifGranted, setNotifGranted] = useState<boolean | null>(null);
@@ -144,15 +150,19 @@ export default function SettingsScreen() {
     setOverallBudget(overall);
     setCategoryBudgets(newCatBudgets);
 
-    // Notification allowlist
+    // Notification allowlist — build from real installed apps
     try {
-      const [defaults, enabled] = await Promise.all([
-        getDefaultAllowlist(),
+      const [installed, enabled] = await Promise.all([
+        getInstalledApps(),
         getAllowlist(),
       ]);
       const enabledSet = new Set(enabled);
+      // Store all installed for the "Add app" picker
+      setAllInstalledApps(installed);
+      // Show bank-likely apps + anything the user already enabled (even non-bank)
+      const bankOrEnabled = installed.filter(a => a.isLikelyBank || enabledSet.has(a.pkg));
       setAllowlistState(
-        defaults.map(d => ({ ...d, enabled: enabledSet.has(d.pkg) })),
+        bankOrEnabled.map(a => ({ ...a, enabled: enabledSet.has(a.pkg) })),
       );
     } catch {
       // ignore if native module unavailable
@@ -218,6 +228,26 @@ export default function SettingsScreen() {
       await setAllowlist(enabledPkgs);
     } catch {
       // revert on error
+      setAllowlistState(allowlist);
+    }
+  }
+
+  // ── Add app from picker ──────────────────────────────────────────────────────
+  async function handleAddApp(app: InstalledApp) {
+    setShowAppPicker(false);
+    // Already in the list?
+    if (allowlist.some(e => e.pkg === app.pkg)) {
+      return;
+    }
+    const updated: AllowlistEntry[] = [
+      ...allowlist,
+      { pkg: app.pkg, label: app.label, enabled: true, isLikelyBank: app.isLikelyBank },
+    ];
+    setAllowlistState(updated);
+    const enabledPkgs = updated.filter(e => e.enabled).map(e => e.pkg);
+    try {
+      await setAllowlist(enabledPkgs);
+    } catch {
       setAllowlistState(allowlist);
     }
   }
@@ -335,27 +365,79 @@ export default function SettingsScreen() {
         </TouchableOpacity>
       </Card>
 
-      {/* ── Banks captured / allowlist ── */}
-      {allowlist.length > 0 && (
-        <>
-          <SectionHeader title="Banks & Apps Captured" />
-          <Card>
-            {allowlist.map(entry => (
-              <View key={entry.pkg} style={styles.allowRow}>
-                <Text style={styles.allowLabel} numberOfLines={1}>
-                  {entry.label}
-                </Text>
-                <Switch
-                  value={entry.enabled}
-                  onValueChange={v => handleAllowlistToggle(entry.pkg, v)}
-                  trackColor={{ true: theme.colors.accent, false: theme.colors.surfaceAlt }}
-                  thumbColor={theme.colors.textPrimary}
-                />
+      {/* ── Banks & Apps Captured ── */}
+      <SectionHeader title="Apps to Capture Notifications From" />
+      <Card>
+        {allowlist.length === 0 ? (
+          <Text style={styles.allowEmpty}>No apps detected. Use "Add App" below.</Text>
+        ) : (
+          allowlist.map(entry => (
+            <View key={entry.pkg} style={styles.allowRow}>
+              <View style={styles.allowLabelBlock}>
+                <Text style={styles.allowLabel} numberOfLines={1}>{entry.label}</Text>
+                {entry.isLikelyBank && (
+                  <Text style={styles.allowBankTag}>Bank / UPI</Text>
+                )}
               </View>
-            ))}
-          </Card>
-        </>
-      )}
+              <Switch
+                value={entry.enabled}
+                onValueChange={v => handleAllowlistToggle(entry.pkg, v)}
+                trackColor={{ true: theme.colors.accent, false: theme.colors.surfaceAlt }}
+                thumbColor={theme.colors.textPrimary}
+              />
+            </View>
+          ))
+        )}
+        <TouchableOpacity
+          style={styles.addAppBtn}
+          onPress={() => setShowAppPicker(true)}
+        >
+          <Text style={styles.addAppBtnText}>+ Add App</Text>
+        </TouchableOpacity>
+      </Card>
+
+      {/* ── Add App Picker Modal ── */}
+      <Modal
+        visible={showAppPicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowAppPicker(false)}
+      >
+        <View style={styles.pickerOverlay}>
+          <View style={styles.pickerSheet}>
+            <Text style={styles.pickerTitle}>Add App to Capture</Text>
+            <Text style={styles.pickerSub}>Select any installed app</Text>
+            <FlatList
+              data={allInstalledApps.filter(
+                a => !allowlist.some(e => e.pkg === a.pkg),
+              )}
+              keyExtractor={item => item.pkg}
+              style={styles.pickerList}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={styles.pickerRow}
+                  onPress={() => handleAddApp(item)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.pickerRowMain}>
+                    <Text style={styles.pickerLabel} numberOfLines={1}>{item.label}</Text>
+                    {item.isLikelyBank && (
+                      <Text style={styles.allowBankTag}>Bank / UPI</Text>
+                    )}
+                  </View>
+                  <Text style={styles.pickerPkg} numberOfLines={1}>{item.pkg}</Text>
+                </TouchableOpacity>
+              )}
+            />
+            <TouchableOpacity
+              style={styles.pickerCancel}
+              onPress={() => setShowAppPicker(false)}
+            >
+              <Text style={styles.pickerCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* ── Permissions ── */}
       <SectionHeader title="Permissions" />
@@ -486,11 +568,97 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.colors.border,
   },
-  allowLabel: {
+  allowLabelBlock: {
     flex: 1,
+    marginRight: theme.spacing.md,
+    gap: 2,
+  },
+  allowLabel: {
     fontSize: theme.font.size.md,
     color: theme.colors.textSecondary,
-    marginRight: theme.spacing.md,
+  },
+  allowBankTag: {
+    fontSize: 9,
+    color: theme.colors.accent,
+    fontWeight: theme.font.weight.medium,
+  },
+  allowEmpty: {
+    fontSize: theme.font.size.sm,
+    color: theme.colors.textMuted,
+    paddingVertical: theme.spacing.sm,
+    textAlign: 'center',
+  },
+  addAppBtn: {
+    marginTop: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: theme.colors.accent + '55',
+    borderRadius: theme.radius.md,
+    borderStyle: 'dashed',
+  },
+  addAppBtnText: {
+    color: theme.colors.accent,
+    fontWeight: theme.font.weight.medium,
+    fontSize: theme.font.size.sm,
+  },
+  pickerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'flex-end',
+  },
+  pickerSheet: {
+    backgroundColor: theme.colors.surface,
+    borderTopLeftRadius: theme.radius.lg,
+    borderTopRightRadius: theme.radius.lg,
+    padding: theme.spacing.lg,
+    paddingBottom: 40,
+    maxHeight: '80%',
+  },
+  pickerTitle: {
+    fontSize: theme.font.size.lg,
+    fontWeight: theme.font.weight.bold,
+    color: theme.colors.textPrimary,
+    marginBottom: 2,
+  },
+  pickerSub: {
+    fontSize: theme.font.size.sm,
+    color: theme.colors.textMuted,
+    marginBottom: theme.spacing.md,
+  },
+  pickerList: {
+    maxHeight: 450,
+  },
+  pickerRow: {
+    paddingVertical: theme.spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+    gap: 2,
+  },
+  pickerRowMain: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  pickerLabel: {
+    fontSize: theme.font.size.md,
+    color: theme.colors.textPrimary,
+    flex: 1,
+  },
+  pickerPkg: {
+    fontSize: 9,
+    color: theme.colors.textMuted,
+  },
+  pickerCancel: {
+    marginTop: theme.spacing.md,
+    padding: theme.spacing.md,
+    alignItems: 'center',
+    backgroundColor: theme.colors.surfaceAlt,
+    borderRadius: theme.radius.md,
+  },
+  pickerCancelText: {
+    color: theme.colors.textSecondary,
+    fontWeight: theme.font.weight.medium,
   },
   permRow: {
     flexDirection: 'row',

@@ -82,3 +82,20 @@ export function getAllowlist(): Promise<string[]> {
 export function setAllowlist(packages: string[]): Promise<boolean> {
   return NotificationModule.setAllowlist(packages);
 }
+
+/** Installed app entry returned by getInstalledApps(). */
+export interface InstalledApp {
+  pkg: string;
+  label: string;
+  /** True when the package is in DEFAULT_ALLOWLIST or has banking/UPI keywords in its name. */
+  isLikelyBank: boolean;
+}
+
+/**
+ * Return all user-facing (LAUNCHER) apps installed on the device.
+ * Requires <queries> intent-filter in AndroidManifest.xml (already added).
+ * Battery-safe: read-only PM query, runs once when the Settings screen opens.
+ */
+export function getInstalledApps(): Promise<InstalledApp[]> {
+  return NotificationModule.getInstalledApps();
+}
