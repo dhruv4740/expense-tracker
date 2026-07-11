@@ -1,11 +1,13 @@
 import { open } from '@op-engineering/op-sqlite';
 import type { DB } from '@op-engineering/op-sqlite';
 import { localTzOffsetMs } from './dates';
+import { hash, strictDedupKey } from './dedup';
+import type { Channel } from './dedup';
+
+export type { Channel } from './dedup';
+export { strictDedupKey, isSoftDuplicate } from './dedup';
 
 export type TransactionType = 'expense' | 'income' | 'self';
-
-/** Capture channel — used only for cross-channel soft dedup (see insertTransaction). */
-export type Channel = 'sms' | 'notification' | 'manual';
 
 export interface TransactionRow {
   id?: number;
@@ -75,16 +77,6 @@ function requireDb(): DB {
     throw new Error('DB not initialised — call initDb() first');
   }
   return db;
-}
-
-// djb2 hash — no external deps
-function hash(s: string): string {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) {
-    h = ((h << 5) + h) ^ s.charCodeAt(i);
-    h = h >>> 0; // keep unsigned 32-bit
-  }
-  return h.toString(16);
 }
 
 function getUserVersion(conn: DB): number {
@@ -183,17 +175,6 @@ export function initDb(): void {
 }
 
 // ─── transactions: write ──────────────────────────────────────────────────────
-
-function strictDedupKey(tx: {
-  source: string | null;
-  amount: number;
-  timestamp: number;
-  raw_text: string | null;
-}): string {
-  return hash(
-    `${tx.source}|${tx.amount}|${Math.floor(tx.timestamp / 60000)}|${tx.raw_text}`,
-  );
-}
 
 export function insertTransaction(
   tx: Omit<TransactionRow, 'id' | 'dedup_key'>,

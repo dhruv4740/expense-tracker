@@ -159,4 +159,95 @@ describe('parseTransaction', () => {
     expect(result).not.toBeNull();
     expect((result as unknown as Record<string, unknown>).category).toBeUndefined();
   });
+
+  // ── 17. Refund-as-income even though "debited" also appears ─────────────
+  it('a refund message is income even when it mentions the original debit', () => {
+    const body =
+      'Refund of Rs.500 credited to your account. Originally debited on 20-Jun-26 for a cancelled order.';
+    const result = parseTransaction('HDFCBK', body, 1719500000000);
+
+    expect(result).not.toBeNull();
+    expect(result!.isExpense).toBe(false);
+    expect(result!.amount).toBe(500);
+  });
+
+  // ── 18. Promo "will be credited" is not a transaction ────────────────────
+  it('returns null for a promo "will be credited" message', () => {
+    const body = 'Rs.100 will be credited on your first payment. T&C apply.';
+    expect(parseTransaction('PROMO', body, Date.now())).toBeNull();
+  });
+
+  // ── 19. Future-dated autopay "will be debited" is not a transaction ──────
+  it('returns null for a future-dated autopay "will be debited" message', () => {
+    const body = 'Rs.5000 will be debited on 01-Jul towards your EMI.';
+    expect(parseTransaction('BANKX', body, Date.now())).toBeNull();
+  });
+
+  // ── 20. Failed payment is not a transaction ───────────────────────────────
+  it('returns null for a failed payment message', () => {
+    const body = 'Rs.2000 could not be debited from your account due to insufficient balance.';
+    expect(parseTransaction('BANKX', body, Date.now())).toBeNull();
+  });
+
+  // ── 21. ₹0 "transaction" is rejected ──────────────────────────────────────
+  it('returns null for a Rs.0.00 failed-auth message', () => {
+    const body = 'Rs.0.00 debited for authorization. Your card is now verified.';
+    expect(parseTransaction('BANKX', body, Date.now())).toBeNull();
+  });
+
+  // ── 22. Lakh magnitude suffix ──────────────────────────────────────────────
+  it('parses "₹1.5 Lakh" as 150000', () => {
+    const body = '₹1.5 Lakh credited to your account via NEFT.';
+    const result = parseTransaction('HDFCBK', body, Date.now());
+
+    expect(result).not.toBeNull();
+    expect(result!.amount).toBe(150000);
+  });
+
+  // ── 23. Crore magnitude suffix ─────────────────────────────────────────────
+  it('parses "Rs.2 Crore" as 20000000', () => {
+    const body = 'Rs.2 Crore debited from your account towards property purchase.';
+    const result = parseTransaction('HDFCBK', body, Date.now());
+
+    expect(result).not.toBeNull();
+    expect(result!.amount).toBe(20000000);
+  });
+
+  // ── 24. 12-digit reference number is not mistaken for a phone ────────────
+  it('does not extract a phone counterparty from inside a 12-digit reference number', () => {
+    const body = 'Rs.300 debited. Ref No 789876543210. Txn successful.';
+    const result = parseTransaction('HDFCBK', body, Date.now());
+
+    expect(result).not.toBeNull();
+    expect(result!.counterparty).not.toBe('9876543210');
+    expect(result!.counterparty).not.toBe('7898765432');
+  });
+
+  // ── 25. Support email is not mistaken for a UPI VPA ───────────────────────
+  it('does not extract a support email as a UPI VPA counterparty', () => {
+    const body = 'Rs.400 debited. For queries contact care@hdfcbank.com.';
+    const result = parseTransaction('HDFCBK', body, Date.now());
+
+    expect(result).not.toBeNull();
+    expect(result!.counterparty).not.toBe('care@hdfcbank');
+  });
+
+  // ── 26. "credited to your account" is not captured as the merchant ───────
+  it('does not capture "your account" as the merchant', () => {
+    const body = 'Rs.600 credited to your account from AMAZON refund.';
+    const result = parseTransaction('HDFCBK', body, Date.now());
+
+    expect(result).not.toBeNull();
+    expect(result!.merchant?.toLowerCase()).not.toContain('your account');
+  });
+
+  // ── 27. A truncated time doesn't swallow the real merchant clause ────────
+  it('captures the merchant after a time expression, not the time itself', () => {
+    const body = 'Rs.350 spent at 10:30 at SWIGGY on 01-Jul-26.';
+    const result = parseTransaction('HDFCBK', body, Date.now());
+
+    expect(result).not.toBeNull();
+    expect(result!.merchant).not.toBe('10');
+    expect(result!.merchant!.toUpperCase()).toContain('SWIGGY');
+  });
 });
