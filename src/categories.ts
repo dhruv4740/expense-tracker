@@ -46,7 +46,7 @@ export const CATEGORY_META: Record<Category, CategoryMeta> = {
   Food:          { color: '#FF6B35', icon: 'fast-food' },
   Groceries:     { color: '#4CAF50', icon: 'cart' },
   Transport:     { color: '#29B6F6', icon: 'car' },
-  Uber:          { color: '#212121', icon: 'car' },
+  Uber:          { color: '#E0E0E0', icon: 'car' },
   Shopping:      { color: '#CE93D8', icon: 'bag' },
   Bills:         { color: '#FFB300', icon: 'receipt' },
   Entertainment: { color: '#F06292', icon: 'film' },
