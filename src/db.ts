@@ -1,7 +1,11 @@
 import { open } from '@op-engineering/op-sqlite';
 import type { DB } from '@op-engineering/op-sqlite';
+import { localTzOffsetMs } from './dates';
 
 export type TransactionType = 'expense' | 'income' | 'self';
+
+/** Capture channel — used only for cross-channel soft dedup (see insertTransaction). */
+export type Channel = 'sms' | 'notification' | 'manual';
 
 export interface TransactionRow {
   id?: number;
@@ -17,12 +21,8 @@ export interface TransactionRow {
   note?: string | null;
   category_source?: 'auto' | 'manual';
   dedup_key?: string;
-}
-
-export interface MonthlySummary {
-  month: string;
-  total: number;
-  byCategory: { category: string; total: number }[];
+  /** null for all pre-migration history — never participates in soft-dedup drops. */
+  channel?: Channel | null;
 }
 
 export interface Range {
@@ -68,7 +68,7 @@ export interface TransactionFilters {
 
 let db: DB | null = null;
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 function requireDb(): DB {
   if (!db) {
@@ -158,8 +158,17 @@ function migrate(conn: DB): void {
         monthly_limit REAL NOT NULL
       );
     `);
-    conn.executeSync(`PRAGMA user_version = ${SCHEMA_VERSION};`);
+    conn.executeSync('PRAGMA user_version = 2;');
     version = 2;
+  }
+
+  // v2 → v3: additive-only. NULL for every existing row (data-preservation
+  // rule — no UPDATE/rewrite of existing rows). NULL channel never
+  // participates in the cross-channel soft-dedup check (see insertTransaction).
+  if (version < 3) {
+    conn.executeSync('ALTER TABLE transactions ADD COLUMN channel TEXT;');
+    conn.executeSync(`PRAGMA user_version = ${SCHEMA_VERSION};`);
+    version = 3;
   }
 }
 
@@ -188,19 +197,30 @@ function strictDedupKey(tx: {
 
 export function insertTransaction(
   tx: Omit<TransactionRow, 'id' | 'dedup_key'>,
+  options: { skipSoftDedup?: boolean } = {},
 ): boolean {
   const conn = requireDb();
 
-  // Soft cross-channel dedup: the SAME payment can arrive via both SMS and the
-  // bank-app notification (different source/raw_text → different strict key).
-  // When the counterparty is known, treat an existing row with the same amount
-  // and counterparty within a 2-minute window as a duplicate.
-  if (tx.counterparty) {
+  // Soft cross-channel dedup (user-chosen policy): the SAME payment can arrive
+  // via both SMS and the bank-app notification (different source/raw_text →
+  // different strict key). A duplicate is only dropped when:
+  //  - the existing row's channel is known (non-NULL) AND different from the
+  //    incoming channel — same-channel repeats are ALWAYS kept, and any
+  //    pre-migration row (channel NULL) never triggers a drop;
+  //  - amount matches and timestamps are within 2 minutes;
+  //  - counterparties match, OR at least one side's counterparty is unknown
+  //    (bank SMS often lack one) — if BOTH are known and differ, it's a
+  //    different payment, not a duplicate.
+  // Manual entries are deliberate user actions and never soft-deduped.
+  if (!options.skipSoftDedup && (tx.channel === 'sms' || tx.channel === 'notification')) {
     const existing = conn.executeSync(
       `SELECT 1 FROM transactions
-        WHERE amount = ? AND counterparty = ? AND ABS(timestamp - ?) < 120000
+        WHERE amount = ?
+          AND ABS(timestamp - ?) < 120000
+          AND channel IS NOT NULL AND channel != ? AND channel IN ('sms', 'notification')
+          AND (counterparty IS NULL OR ? IS NULL OR counterparty = ?)
         LIMIT 1`,
-      [tx.amount, tx.counterparty, tx.timestamp],
+      [tx.amount, tx.timestamp, tx.channel, tx.counterparty ?? null, tx.counterparty ?? null],
     );
     if ((existing.rows ?? []).length > 0) {
       return false;
@@ -212,8 +232,8 @@ export function insertTransaction(
   const res = conn.executeSync(
     `INSERT OR IGNORE INTO transactions
        (amount, merchant, source, raw_text, category, timestamp, type,
-        counterparty, account, note, category_source, dedup_key)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        counterparty, account, note, category_source, dedup_key, channel)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       tx.amount,
       tx.merchant ?? null,
@@ -227,6 +247,7 @@ export function insertTransaction(
       tx.note ?? null,
       tx.category_source ?? 'auto',
       dedup_key,
+      tx.channel ?? null,
     ],
   );
 
@@ -245,8 +266,8 @@ export function insertManual(
   const res = conn.executeSync(
     `INSERT INTO transactions
        (amount, merchant, source, raw_text, category, timestamp, type,
-        counterparty, account, note, category_source, dedup_key)
-     VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, 'manual', ?)`,
+        counterparty, account, note, category_source, dedup_key, channel)
+     VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, 'manual', ?, 'manual')`,
     [
       tx.amount,
       tx.merchant ?? null,
@@ -336,17 +357,6 @@ export function getAll(): TransactionRow[] {
   const conn = requireDb();
   const res = conn.executeSync(
     'SELECT * FROM transactions ORDER BY timestamp DESC',
-  );
-  return (res.rows ?? []).map(mapRow);
-}
-
-export function getByDateRange(fromMs: number, toMs: number): TransactionRow[] {
-  const conn = requireDb();
-  const res = conn.executeSync(
-    `SELECT * FROM transactions
-      WHERE timestamp BETWEEN ? AND ?
-      ORDER BY timestamp DESC`,
-    [fromMs, toMs],
   );
   return (res.rows ?? []).map(mapRow);
 }
@@ -447,13 +457,19 @@ export function getSummary(range: Range): Summary {
     total: Number(row.total ?? 0),
   }));
 
+  // Bucket by LOCAL calendar day, not UTC day — otherwise anything between
+  // local midnight and the UTC offset (00:00-05:30 on an IST device) lands in
+  // yesterday's chart bucket while the transaction list correctly shows it
+  // under "Today". `day` here is a localDayIndex (see dates.ts); convert back
+  // with localDayIndexToDate() when rendering labels.
+  const tzOffsetMs = localTzOffsetMs();
   const dayRes = conn.executeSync(
-    `SELECT CAST(timestamp / 86400000 AS INTEGER) AS day, SUM(amount) AS total
+    `SELECT CAST((timestamp + ?) / 86400000 AS INTEGER) AS day, SUM(amount) AS total
        FROM transactions
       WHERE type = 'expense' AND timestamp BETWEEN ? AND ?
       GROUP BY day
       ORDER BY day ASC`,
-    [from, to],
+    [tzOffsetMs, from, to],
   );
   const byDay = (dayRes.rows ?? []).map(row => ({
     day: Number(row.day ?? 0),
@@ -461,18 +477,6 @@ export function getSummary(range: Range): Summary {
   }));
 
   return { spent, received, net: received - spent, byCategory, byDay };
-}
-
-/** Legacy current-month summary (kept for compatibility). Excludes self. */
-export function getMonthlySummary(ref: Date = new Date()): MonthlySummary {
-  const year = ref.getFullYear();
-  const month = ref.getMonth(); // 0-based
-  const start = new Date(year, month, 1).getTime();
-  const end = new Date(year, month + 1, 0, 23, 59, 59, 999).getTime();
-  const monthLabel = `${year}-${String(month + 1).padStart(2, '0')}`;
-
-  const summary = getSummary({ from: start, to: end });
-  return { month: monthLabel, total: summary.spent, byCategory: summary.byCategory };
 }
 
 export function getTopMerchants(
@@ -495,11 +499,6 @@ export function getTopMerchants(
     total: Number(row.total ?? 0),
     count: Number(row.count ?? 0),
   }));
-}
-
-/** Per-day expense totals across a range (for trend charts). */
-export function getTrend(range: Range): { day: number; total: number }[] {
-  return getSummary(range).byDay;
 }
 
 // ─── merchant rules (learned categorization) ──────────────────────────────────
@@ -624,7 +623,7 @@ export function getAllAccountBalances(): { account: string; balance: number; upd
     } catch {
       return { account: key, balance: 0, updatedAt: 0 };
     }
-  }).filter(b => b.balance > 0);
+  });
 }
 
 // ─── Recurring detection ──────────────────────────────────────────────────────

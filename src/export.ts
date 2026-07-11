@@ -200,6 +200,7 @@ export async function restoreFromJson(): Promise<{ added: number; total: number 
 
     // Map the restored row defensively: only pass fields the DB knows about,
     // and strip the surrogate id so SQLite generates a fresh one.
+    const channel = raw.channel;
     const tx: Omit<TransactionRow, 'id' | 'dedup_key'> = {
       amount: raw.amount,
       merchant: typeof raw.merchant === 'string' ? raw.merchant : null,
@@ -214,9 +215,17 @@ export async function restoreFromJson(): Promise<{ added: number; total: number 
       note: typeof raw.note === 'string' ? raw.note : null,
       category_source:
         raw.category_source === 'manual' ? 'manual' : 'auto',
+      channel:
+        channel === 'sms' || channel === 'notification' || channel === 'manual'
+          ? channel
+          : null,
     };
 
-    const inserted = insertTransaction(tx);
+    // Restore bypasses soft dedup — re-running the cross-channel heuristic on
+    // restore could merge two genuine same-amount payments <2 min apart. The
+    // strict dedup_key (source|amount|minute|raw_text) still applies, so a
+    // restore of an already-present backup stays idempotent.
+    const inserted = insertTransaction(tx, { skipSoftDedup: true });
     if (inserted) {
       added += 1;
     }

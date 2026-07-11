@@ -32,7 +32,6 @@ import type { Category } from '../categories';
 import { DATA_CHANGED } from '../sync';
 import {
   AmountText,
-  BarsChart,
   Card,
   Donut,
   ProgressBar,
@@ -40,7 +39,7 @@ import {
   TrendChart,
 } from '../components';
 import { theme } from '../theme';
-import { monthRange, prevMonthRange } from '../dates';
+import { monthRange, prevMonthRange, localDayIndexToDate } from '../dates';
 import { computeBudgetStatus } from '../budgets';
 import type { BudgetStatus } from '../budgets';
 
@@ -145,7 +144,7 @@ export default function DashboardScreen() {
   // ── Trend data ──────────────────────────────────────────────────────────────
   const trendData = summary.byDay.map(bd => ({
     value: bd.total,
-    label: String(new Date(bd.day * 86_400_000).getDate()),
+    label: String(localDayIndexToDate(bd.day).getDate()),
   }));
 
   // ── Over-budget check ───────────────────────────────────────────────────────

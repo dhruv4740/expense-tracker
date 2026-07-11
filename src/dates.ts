@@ -51,6 +51,52 @@ export function last3MonthsRange(ref?: Date): Range {
   };
 }
 
+// ─── Local-day bucketing (for SQL GROUP BY that must agree with the device's
+// local calendar day, not the UTC day) ─────────────────────────────────────
+
+/**
+ * Milliseconds to add to a UTC timestamp to get local-calendar-day arithmetic.
+ * E.g. on an India-set device (UTC+5:30) this is +19,800,000ms. Used so a SQL
+ * `CAST((timestamp + ?) / 86400000 AS INTEGER)` bucket agrees with the same
+ * local day the transaction list (and this file's `dayStart`) uses — without
+ * this, anything between local midnight and the UTC offset (00:00–05:30 IST)
+ * lands in the *previous* UTC day's chart bucket while the list correctly
+ * shows it under "Today".
+ */
+export function localTzOffsetMs(): number {
+  return -new Date().getTimezoneOffset() * 60000;
+}
+
+/** Local-day index for `ts`, matching the bucket produced by the SQL expression above. */
+export function localDayIndex(ts: number): number {
+  return Math.floor((ts + localTzOffsetMs()) / 86400000);
+}
+
+/** Inverse of localDayIndex: the UTC ms instant of local midnight for that day index. */
+export function localDayIndexToDate(dayIndex: number): Date {
+  return new Date(dayIndex * 86400000 - localTzOffsetMs());
+}
+
+/**
+ * Number of fully-elapsed local days in `range`, capped at "yesterday" when
+ * the range includes today (today itself never counts as completed). Used
+ * for "₹X/day" style averages. Returns 0 if the range hasn't completed a
+ * single day yet (e.g. the 1st of the month, checked before end of day).
+ */
+export function completedDays(range: Range): number {
+  const todayMs = dayStart(Date.now());
+  const rangeFromDay = dayStart(range.from);
+  // Effective end is "yesterday" if the range extends into today/future,
+  // otherwise the range's own end (fully in the past, e.g. "Last month").
+  const rangeToDay = dayStart(Math.min(range.to, Date.now() - 1));
+  const effectiveToDay = rangeToDay >= todayMs ? todayMs - 86_400_000 : rangeToDay;
+
+  if (effectiveToDay < rangeFromDay) {
+    return 0;
+  }
+  return Math.round((effectiveToDay - rangeFromDay) / 86_400_000) + 1;
+}
+
 // ─── Formatting ───────────────────────────────────────────────────────────────
 
 /** "28 Jun, 03:45 PM" */

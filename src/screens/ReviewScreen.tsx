@@ -39,7 +39,13 @@ export default function ReviewScreen() {
   const [selected, setSelected] = useState<TransactionRow | null>(null);
 
   const load = useCallback(() => {
-    const rows = queryTransactions({ categories: ['Other'], includeSelf: false });
+    // Match getUncategorizedCount's predicate exactly (expenses only) so the
+    // Dashboard banner count and this list never disagree.
+    const rows = queryTransactions({
+      categories: ['Other'],
+      types: ['expense'],
+      includeSelf: false,
+    });
     setItems(rows);
   }, []);
 

@@ -3,7 +3,7 @@
  *
  * Architecture note (RULES.md §1):
  *   initDb() is called at module load (synchronous, before any component
- *   renders) so that getAll() / getMonthlySummary() are safe to call from
+ *   renders) so that getAll() / getSummary() are safe to call from
  *   useFocusEffect inside the tab screens.  The useEffect call below is a
  *   belt-and-suspenders guard in case the module is ever re-initialised, but
  *   the critical guarantee is the top-level call.

@@ -14,7 +14,7 @@
  * Any successful insert emits DATA_CHANGED so focused screens can refresh in place.
  */
 import { DeviceEventEmitter } from 'react-native';
-import { drainBuffer, onSmsReceived, type RawEvent } from './native/SmsModule';
+import { peekBuffer, ackBuffer, onSmsReceived, type RawEvent } from './native/SmsModule';
 import { onNotificationReceived } from './native/NotificationModule';
 import { parseTransaction } from './parser';
 import { insertTransaction, getAllMerchantRules, setAccountBalance } from './db';
@@ -113,6 +113,7 @@ function processOne(e: RawEvent): boolean {
     counterparty: parsed.counterparty ?? null,
     account: parsed.account ?? null,
     category_source: 'auto',
+    channel: e.kind,
   });
 }
 
@@ -122,6 +123,13 @@ function processOne(e: RawEvent): boolean {
  * Drain everything captured while the app was closed. Refreshes caches first
  * so the run always uses the latest identity + merchant rules.
  *
+ * Uses peek → per-event try/catch → ack(processedCount) instead of a single
+ * clear-then-process drain: if one event's processing throws (a bad event
+ * shouldn't be possible given parseTransaction's guards, but native input is
+ * never fully trusted) it's skipped and counted, not fatal — and only events
+ * that were actually looped over get acked, so a crash mid-loop (or the app
+ * being killed) leaves the rest for the next sync instead of losing them.
+ *
  * @returns Number of new rows inserted.
  */
 export async function syncBuffer(): Promise<number> {
@@ -129,12 +137,21 @@ export async function syncBuffer(): Promise<number> {
   refreshSyncCaches();
 
   let inserted = 0;
+  let processed = 0;
   try {
-    const events = await drainBuffer();
+    const events = await peekBuffer();
     for (const e of events) {
-      if (processOne(e)) {
-        inserted++;
+      try {
+        if (processOne(e)) {
+          inserted++;
+        }
+      } catch {
+        // One malformed event doesn't kill the batch — skip and move on.
       }
+      processed++;
+    }
+    if (processed > 0) {
+      await ackBuffer(processed);
     }
   } catch {
     // Native module not ready (e.g. dev fast-refresh) — buffer persists for next drain.
