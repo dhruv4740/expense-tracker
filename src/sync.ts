@@ -78,6 +78,7 @@ function processOne(e: RawEvent): boolean {
     parsed.raw_text,
     parsed.counterparty,
     learnedRulesCache,
+    parsed.isExpense,
   );
 
   // 3. Determine transaction type.

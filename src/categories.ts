@@ -152,12 +152,17 @@ export function normalizeMerchantKey(
  * @param body        Raw SMS / notification body for broad keyword matching.
  * @param counterparty UPI VPA / phone / account fragment (may be null).
  * @param learnedRules Map from merchant_rules table (key → category string).
+ * @param isExpense   When explicitly false (income), skips the spend-keyword
+ *                    map and defaults to 'Income' — a learned rule can still
+ *                    override this (e.g. the user recategorizes a specific
+ *                    refund source by hand).
  */
 export function categorize(
   merchant: string | null,
   body: string,
   counterparty: string | null,
   learnedRules?: Record<string, string>,
+  isExpense?: boolean,
 ): Category {
   // 1. Learned rules take highest priority.
   if (learnedRules) {
@@ -169,6 +174,12 @@ export function categorize(
         return learned as Category;
       }
     }
+  }
+
+  // 1b. Income defaults to the Income category rather than matching spend
+  // keywords in the body (a refund from Swiggy shouldn't land in Food).
+  if (isExpense === false) {
+    return 'Income';
   }
 
   // 2. Keyword match across merchant + counterparty + raw body.
