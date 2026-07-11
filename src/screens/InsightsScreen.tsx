@@ -41,6 +41,7 @@ import {
   prevMonthRange,
   last3MonthsRange,
   localDayIndexToDate,
+  completedDays,
 } from '../dates';
 import type { Range } from '../db';
 
@@ -93,6 +94,20 @@ export default function InsightsScreen() {
   const [rangeKey, setRangeKey] = useState<RangeKey>('month');
   const [data, setData] = useState<InsightData>(() => loadData('month'));
 
+  // View-only category exclude toggle (6d) — non-persistent, screen-local.
+  const [excluded, setExcluded] = useState<Set<Category>>(new Set());
+  const toggleExcluded = useCallback((cat: Category) => {
+    setExcluded(prev => {
+      const next = new Set(prev);
+      if (next.has(cat)) {
+        next.delete(cat);
+      } else {
+        next.add(cat);
+      }
+      return next;
+    });
+  }, []);
+
   const reload = useCallback((key: RangeKey) => {
     setData(loadData(key));
   }, []);
@@ -117,9 +132,15 @@ export default function InsightsScreen() {
 
   const { summary, topMerchants, frequent, recurring } = data;
 
+  // ── Category exclude toggle (6d) ────────────────────────────────────────────
+  const excludedTotal = summary.byCategory
+    .filter(bc => excluded.has(bc.category as Category))
+    .reduce((sum, bc) => sum + bc.total, 0);
+  const displayedSpent = summary.spent - excludedTotal;
+
   // ── Donut data ──────────────────────────────────────────────────────────────
   const donutData = summary.byCategory
-    .filter(bc => bc.total > 0)
+    .filter(bc => bc.total > 0 && !excluded.has(bc.category as Category))
     .sort((a, b) => b.total - a.total)
     .map(bc => ({
       value: bc.total,
@@ -137,14 +158,22 @@ export default function InsightsScreen() {
 
   // ── Debit vs Credit bars ────────────────────────────────────────────────────
   const barsData = [
-    { label: 'Debit', value: summary.spent, color: theme.colors.debit },
+    { label: 'Debit', value: displayedSpent, color: theme.colors.debit },
     { label: 'Credit', value: summary.received, color: theme.colors.credit },
   ];
 
-  const totalSpentFormatted = summary.spent.toLocaleString('en-IN', {
+  const totalSpentFormatted = displayedSpent.toLocaleString('en-IN', {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   });
+
+  // ── Per-day spend (6c) — "Last month" counts every day; the current month
+  // counts only completed days. ─────────────────────────────────────────────
+  const rangeCompletedDays = completedDays(getRange(rangeKey));
+  const perDayFormatted =
+    rangeCompletedDays > 0
+      ? `₹${Math.round(displayedSpent / rangeCompletedDays).toLocaleString('en-IN')}/day`
+      : '—';
 
   return (
     <ScrollView
@@ -184,17 +213,31 @@ export default function InsightsScreen() {
           centerLabel="spent"
           size={180}
         />
-        {donutData.length > 0 && (
+        {/* Tap a category to hide it from total/donut/per-day (6d) */}
+        {summary.byCategory.filter(bc => bc.total > 0).length > 0 && (
           <View style={styles.legend}>
-            {donutData.map(slice => (
-              <View key={slice.label} style={styles.legendItem}>
-                <CategoryChip category={slice.label} small />
-                <Text style={styles.legendAmt}>
-                  ₹{slice.value.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                </Text>
-              </View>
-            ))}
+            {summary.byCategory.filter(bc => bc.total > 0).map(bc => {
+              const isExcluded = excluded.has(bc.category as Category);
+              return (
+                <TouchableOpacity
+                  key={bc.category}
+                  style={[styles.legendItem, isExcluded && styles.legendItemExcluded]}
+                  onPress={() => toggleExcluded(bc.category as Category)}
+                  activeOpacity={0.6}
+                >
+                  <CategoryChip category={bc.category} small />
+                  <Text style={[styles.legendAmt, isExcluded && styles.legendTextExcluded]}>
+                    ₹{bc.total.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
+        )}
+        {excluded.size > 0 && (
+          <Text style={styles.excludingCaption}>
+            excluding {Array.from(excluded).join(', ')}
+          </Text>
         )}
       </Card>
 
@@ -202,6 +245,7 @@ export default function InsightsScreen() {
       <SectionHeader title="Daily Spend Trend" />
       <Card>
         <TrendChart data={trendData} color={theme.colors.accent} height={160} />
+        <Text style={styles.perDayCaption}>{perDayFormatted}</Text>
       </Card>
 
       {/* ── Debit vs Credit ── */}
@@ -348,6 +392,25 @@ const styles = StyleSheet.create({
     fontSize: theme.font.size.sm,
     color: theme.colors.textPrimary,
     fontWeight: theme.font.weight.medium,
+  },
+  legendItemExcluded: {
+    opacity: 0.4,
+  },
+  legendTextExcluded: {
+    textDecorationLine: 'line-through',
+  },
+  excludingCaption: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textMuted,
+    marginTop: theme.spacing.sm,
+    textAlign: 'center',
+    fontStyle: 'italic',
+  },
+  perDayCaption: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textMuted,
+    marginTop: theme.spacing.sm,
+    textAlign: 'center',
   },
   merchantRow: {
     flexDirection: 'row',

@@ -88,8 +88,12 @@ describe('categorize — keyword matching', () => {
     expect(categorize('JioMart', 'Rs.1200 debited at JioMart', null, noRules)).toBe('Groceries');
   });
 
-  it('categorizes Uber → Transport', () => {
-    expect(categorize('Uber', 'Rs.150 spent on Uber ride', null, noRules)).toBe('Transport');
+  it('categorizes Uber → Uber (not Transport)', () => {
+    expect(categorize('Uber', 'Rs.150 spent on Uber ride', null, noRules)).toBe('Uber');
+  });
+
+  it('categorizes Ola → Transport', () => {
+    expect(categorize('Ola', 'Rs.150 spent on Ola ride', null, noRules)).toBe('Transport');
   });
 
   it('categorizes Amazon → Shopping', () => {
@@ -156,7 +160,7 @@ describe('categorize — learnedRules override', () => {
   it('falls through to keyword if learned key not found', () => {
     const rules: Record<string, string> = { 'other@vpa': 'Food' };
     const result = categorize('Uber', 'Rs.150 spent on Uber', null, rules);
-    expect(result).toBe('Transport');
+    expect(result).toBe('Uber');
   });
 
   it('ignores learned rule with invalid category value', () => {

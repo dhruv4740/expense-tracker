@@ -8,10 +8,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   DeviceEventEmitter,
+  Modal,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -25,6 +27,7 @@ import {
   queryTransactions,
   getAllAccountBalances,
   getUncategorizedCount,
+  setAccountBalance,
 } from '../db';
 import type { Summary, TransactionRow } from '../db';
 import { CATEGORY_META, CATEGORIES } from '../categories';
@@ -39,7 +42,7 @@ import {
   TrendChart,
 } from '../components';
 import { theme } from '../theme';
-import { monthRange, prevMonthRange, localDayIndexToDate } from '../dates';
+import { monthRange, prevMonthRange, localDayIndexToDate, completedDays } from '../dates';
 import { computeBudgetStatus } from '../budgets';
 import type { BudgetStatus } from '../budgets';
 
@@ -90,6 +93,24 @@ export default function DashboardScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [notifHealthOk, setNotifHealthOk] = useState(true);
 
+  // View-only category exclude toggle (6d) — non-persistent, screen-local.
+  const [excluded, setExcluded] = useState<Set<Category>>(new Set());
+  const toggleExcluded = useCallback((cat: Category) => {
+    setExcluded(prev => {
+      const next = new Set(prev);
+      if (next.has(cat)) {
+        next.delete(cat);
+      } else {
+        next.add(cat);
+      }
+      return next;
+    });
+  }, []);
+
+  // Editable balances (6e) — tap a balance row to correct it by hand.
+  const [editingAccount, setEditingAccount] = useState<string | null>(null);
+  const [editingValue, setEditingValue] = useState('');
+
   const reload = useCallback(() => {
     setData(loadData());
   }, []);
@@ -118,16 +139,25 @@ export default function DashboardScreen() {
   const { summary, prevSummary, topMerchant, biggestExpense, budgetStatus, balances, monthLabel, uncategorizedCount } = data;
 
   // ── Month-over-month deltas ────────────────────────────────────────────────
-  const spentDelta = prevSummary.spent > 0
-    ? ((summary.spent - prevSummary.spent) / prevSummary.spent) * 100
-    : null;
+  // spentDelta is computed below displayedSpent (uses the excluded-categories
+  // view so it never silently disagrees with the number shown on screen).
   const receivedDelta = prevSummary.received > 0
     ? ((summary.received - prevSummary.received) / prevSummary.received) * 100
     : null;
 
+  // ── Category exclude toggle (6d): displayed totals drop excluded categories
+  // from the total, donut, and per-day figure. View-only — no data changes.
+  const excludedTotal = summary.byCategory
+    .filter(bc => excluded.has(bc.category as Category))
+    .reduce((sum, bc) => sum + bc.total, 0);
+  const displayedSpent = summary.spent - excludedTotal;
+  const spentDelta = prevSummary.spent > 0
+    ? ((displayedSpent - prevSummary.spent) / prevSummary.spent) * 100
+    : null;
+
   // ── Donut data ──────────────────────────────────────────────────────────────
   const donutData = summary.byCategory
-    .filter(bc => bc.total > 0)
+    .filter(bc => bc.total > 0 && !excluded.has(bc.category as Category))
     .map(bc => ({
       value: bc.total,
       color: (CATEGORIES as string[]).includes(bc.category)
@@ -136,10 +166,17 @@ export default function DashboardScreen() {
       label: bc.category,
     }));
 
-  const totalSpentFormatted = summary.spent.toLocaleString('en-IN', {
+  const totalSpentFormatted = displayedSpent.toLocaleString('en-IN', {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   });
+
+  // ── Per-day spend (6c) ──────────────────────────────────────────────────────
+  const monthCompletedDays = completedDays(monthRange());
+  const perDayFormatted =
+    monthCompletedDays > 0
+      ? `₹${Math.round(displayedSpent / monthCompletedDays).toLocaleString('en-IN')}/day`
+      : '—';
 
   // ── Trend data ──────────────────────────────────────────────────────────────
   const trendData = summary.byDay.map(bd => ({
@@ -203,12 +240,13 @@ export default function DashboardScreen() {
         <View style={styles.heroRow}>
           <View style={styles.heroItem}>
             <Text style={styles.heroLabel}>Spent</Text>
-            <AmountText amount={summary.spent} type="expense" size={theme.font.size.xl} />
+            <AmountText amount={displayedSpent} type="expense" size={theme.font.size.xl} />
             {spentDelta != null && (
               <Text style={[styles.delta, spentDelta > 0 ? styles.deltaUp : styles.deltaDown]}>
                 {spentDelta > 0 ? '▲' : '▼'} {Math.abs(spentDelta).toFixed(0)}% vs last mo
               </Text>
             )}
+            <Text style={styles.perDay}>{perDayFormatted}</Text>
           </View>
           <View style={styles.heroSep} />
           <View style={styles.heroItem}>
@@ -247,21 +285,40 @@ export default function DashboardScreen() {
           centerLabel="spent"
           size={200}
         />
-        {/* Legend */}
-        {donutData.length > 0 && (
+        {/* Legend — tap a category to hide it from total/donut/per-day (6d) */}
+        {summary.byCategory.filter(bc => bc.total > 0).length > 0 && (
           <View style={styles.legend}>
-            {donutData.map(slice => (
-              <View key={slice.label} style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: slice.color }]} />
-                <Text style={styles.legendLabel} numberOfLines={1}>
-                  {slice.label}
-                </Text>
-                <Text style={styles.legendAmount}>
-                  ₹{slice.value.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                </Text>
-              </View>
-            ))}
+            {summary.byCategory.filter(bc => bc.total > 0).map(bc => {
+              const isExcluded = excluded.has(bc.category as Category);
+              const color = (CATEGORIES as string[]).includes(bc.category)
+                ? CATEGORY_META[bc.category as Category].color
+                : '#78909C';
+              return (
+                <TouchableOpacity
+                  key={bc.category}
+                  style={[styles.legendItem, isExcluded && styles.legendItemExcluded]}
+                  onPress={() => toggleExcluded(bc.category as Category)}
+                  activeOpacity={0.6}
+                >
+                  <View style={[styles.legendDot, { backgroundColor: color }]} />
+                  <Text
+                    style={[styles.legendLabel, isExcluded && styles.legendTextExcluded]}
+                    numberOfLines={1}
+                  >
+                    {bc.category}
+                  </Text>
+                  <Text style={[styles.legendAmount, isExcluded && styles.legendTextExcluded]}>
+                    ₹{bc.total.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
+        )}
+        {excluded.size > 0 && (
+          <Text style={styles.excludingCaption}>
+            excluding {Array.from(excluded).join(', ')}
+          </Text>
         )}
       </Card>
 
@@ -333,7 +390,15 @@ export default function DashboardScreen() {
           <SectionHeader title="Last Known Balances" />
           <Card>
             {balances.map(b => (
-              <View key={b.account} style={styles.balanceRow}>
+              <TouchableOpacity
+                key={b.account}
+                style={styles.balanceRow}
+                onPress={() => {
+                  setEditingAccount(b.account);
+                  setEditingValue(String(b.balance));
+                }}
+                activeOpacity={0.6}
+              >
                 <Text style={styles.balanceAccount}>
                   {b.account.length <= 4 ? `A/c ••••${b.account}` : b.account}
                 </Text>
@@ -347,7 +412,7 @@ export default function DashboardScreen() {
                     })}
                   </Text>
                 </View>
-              </View>
+              </TouchableOpacity>
             ))}
             <Text style={styles.balanceDisclaimer}>
               Best-effort · from SMS "Avl Bal" · not real-time
@@ -393,6 +458,52 @@ export default function DashboardScreen() {
       </Card>
 
       <View style={styles.bottomPad} />
+
+      {/* Edit-balance modal (6e) */}
+      <Modal
+        visible={editingAccount != null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setEditingAccount(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>
+              Edit balance{editingAccount ? ` — ${editingAccount}` : ''}
+            </Text>
+            <TextInput
+              style={styles.modalInput}
+              value={editingValue}
+              onChangeText={setEditingValue}
+              keyboardType="decimal-pad"
+              placeholder="0.00"
+              placeholderTextColor={theme.colors.textMuted}
+              autoFocus
+            />
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={styles.modalBtn}
+                onPress={() => setEditingAccount(null)}
+              >
+                <Text style={styles.modalBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalBtn, styles.modalBtnPrimary]}
+                onPress={() => {
+                  const value = parseFloat(editingValue);
+                  if (editingAccount && !isNaN(value)) {
+                    setAccountBalance(editingAccount, value, Date.now());
+                    reload();
+                  }
+                  setEditingAccount(null);
+                }}
+              >
+                <Text style={[styles.modalBtnText, styles.modalBtnTextPrimary]}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -493,6 +604,12 @@ const styles = StyleSheet.create({
     height: 40,
     backgroundColor: theme.colors.border,
   },
+  perDay: {
+    fontSize: 9,
+    color: theme.colors.textMuted,
+    marginTop: 2,
+    textAlign: 'center',
+  },
   donutCard: {
     alignItems: 'center',
     paddingVertical: theme.spacing.lg,
@@ -521,6 +638,77 @@ const styles = StyleSheet.create({
     fontSize: theme.font.size.sm,
     color: theme.colors.textPrimary,
     fontWeight: theme.font.weight.medium,
+  },
+  legendItemExcluded: {
+    opacity: 0.4,
+  },
+  legendTextExcluded: {
+    textDecorationLine: 'line-through',
+  },
+  excludingCaption: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textMuted,
+    marginTop: theme.spacing.sm,
+    textAlign: 'center',
+    fontStyle: 'italic',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: theme.spacing.lg,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.md,
+    padding: theme.spacing.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+  },
+  modalTitle: {
+    fontSize: theme.font.size.md,
+    color: theme.colors.textPrimary,
+    fontWeight: theme.font.weight.semibold,
+    marginBottom: theme.spacing.md,
+  },
+  modalInput: {
+    fontSize: theme.font.size.xl,
+    color: theme.colors.textPrimary,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: theme.radius.sm,
+    padding: theme.spacing.md,
+    textAlign: 'center',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+    marginTop: theme.spacing.lg,
+  },
+  modalBtn: {
+    flex: 1,
+    paddingVertical: theme.spacing.md,
+    borderRadius: theme.radius.sm,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceAlt,
+  },
+  modalBtnPrimary: {
+    borderColor: theme.colors.accent,
+    backgroundColor: theme.colors.accent,
+  },
+  modalBtnText: {
+    fontSize: theme.font.size.sm,
+    color: theme.colors.textSecondary,
+    fontWeight: theme.font.weight.medium,
+  },
+  modalBtnTextPrimary: {
+    color: '#000',
+    fontWeight: theme.font.weight.bold,
   },
   warningBanner: {
     marginHorizontal: theme.spacing.lg,

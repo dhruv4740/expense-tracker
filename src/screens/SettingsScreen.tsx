@@ -120,6 +120,7 @@ export default function SettingsScreen() {
   const [allowlist, setAllowlistState] = useState<AllowlistEntry[]>([]);
   const [showAppPicker, setShowAppPicker] = useState(false);
   const [allInstalledApps, setAllInstalledApps] = useState<InstalledApp[]>([]);
+  const [allowlistError, setAllowlistError] = useState<string | null>(null);
 
   // ── Permissions ─────────────────────────────────────────────────────────────
   const [notifGranted, setNotifGranted] = useState<boolean | null>(null);
@@ -151,6 +152,7 @@ export default function SettingsScreen() {
     setCategoryBudgets(newCatBudgets);
 
     // Notification allowlist — build from real installed apps
+    setAllowlistError(null);
     try {
       const [installed, enabled] = await Promise.all([
         getInstalledApps(),
@@ -164,8 +166,11 @@ export default function SettingsScreen() {
       setAllowlistState(
         bankOrEnabled.map(a => ({ ...a, enabled: enabledSet.has(a.pkg) })),
       );
-    } catch {
-      // ignore if native module unavailable
+    } catch (e) {
+      // Surface the failure instead of silently looking empty/frozen.
+      setAllowlistError(
+        e instanceof Error ? e.message : 'Could not load installed apps.',
+      );
     }
 
     // Permissions
@@ -368,6 +373,9 @@ export default function SettingsScreen() {
       {/* ── Banks & Apps Captured ── */}
       <SectionHeader title="Apps to Capture Notifications From" />
       <Card>
+        {allowlistError && (
+          <Text style={styles.allowError}>⚠️ {allowlistError}</Text>
+        )}
         {allowlist.length === 0 ? (
           <Text style={styles.allowEmpty}>No apps detected. Use "Add App" below.</Text>
         ) : (
@@ -408,9 +416,14 @@ export default function SettingsScreen() {
             <Text style={styles.pickerTitle}>Add App to Capture</Text>
             <Text style={styles.pickerSub}>Select any installed app</Text>
             <FlatList
-              data={allInstalledApps.filter(
-                a => !allowlist.some(e => e.pkg === a.pkg),
-              )}
+              data={allInstalledApps
+                .filter(a => !allowlist.some(e => e.pkg === a.pkg))
+                .sort((a, b) => {
+                  if (a.isLikelyBank !== b.isLikelyBank) {
+                    return a.isLikelyBank ? -1 : 1;
+                  }
+                  return a.label.localeCompare(b.label);
+                })}
               keyExtractor={item => item.pkg}
               style={styles.pickerList}
               renderItem={({ item }) => (
@@ -428,6 +441,11 @@ export default function SettingsScreen() {
                   <Text style={styles.pickerPkg} numberOfLines={1}>{item.pkg}</Text>
                 </TouchableOpacity>
               )}
+              ListEmptyComponent={
+                <Text style={styles.pickerEmpty}>
+                  No apps found — check notification access is granted, or reopen Settings.
+                </Text>
+              }
             />
             <TouchableOpacity
               style={styles.pickerCancel}
@@ -587,6 +605,18 @@ const styles = StyleSheet.create({
     color: theme.colors.textMuted,
     paddingVertical: theme.spacing.sm,
     textAlign: 'center',
+  },
+  allowError: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.danger,
+    paddingBottom: theme.spacing.sm,
+  },
+  pickerEmpty: {
+    fontSize: theme.font.size.sm,
+    color: theme.colors.textMuted,
+    textAlign: 'center',
+    paddingVertical: theme.spacing.xl,
+    lineHeight: 20,
   },
   addAppBtn: {
     marginTop: theme.spacing.md,

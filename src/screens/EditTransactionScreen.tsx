@@ -3,10 +3,12 @@
 // ADD (tx param absent) or EDIT (tx param present) a transaction.
 // After save/delete: emits DATA_CHANGED and navigation.goBack().
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   DeviceEventEmitter,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
   StyleSheet,
   Switch,
@@ -24,6 +26,9 @@ import {
   deleteTransaction,
   queryTransactions,
   upsertMerchantRule,
+  getAllAccountBalances,
+  getAccountBalance,
+  setAccountBalance,
 } from '../db';
 import type { TransactionRow, TransactionType } from '../db';
 import { CATEGORIES } from '../categories';
@@ -86,6 +91,35 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
   const [note, setNote] = useState(tx?.note ?? '');
   const [dateStr, setDateStr] = useState(tsToString(tx?.timestamp ?? Date.now()));
   const [applyToAll, setApplyToAll] = useState(false);
+
+  // Account picker — new manual entries only (6e). Editing an existing row
+  // never retro-adjusts a balance, so there's nothing useful to pick here.
+  const [accounts, setAccounts] = useState<{ account: string; balance: number }[]>([]);
+  const [selectedAccount, setSelectedAccount] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isEdit) {
+      return;
+    }
+    const balances = getAllAccountBalances();
+    setAccounts(balances);
+    if (balances.length === 1) {
+      setSelectedAccount(balances[0].account);
+    }
+  }, [isEdit]);
+
+  // Keyboard-safe scrolling (6a): the Date field sits near the bottom of the
+  // form and nothing lifted the screen above the keyboard, so the user typed
+  // blind. Track each field's Y position on layout and scroll it into view
+  // on focus — RN 0.86 edge-to-edge on Android 15 ignores adjustResize, so
+  // the manifest setting alone doesn't fix this; KeyboardAvoidingView +
+  // manual scroll-into-view does.
+  const scrollRef = useRef<ScrollView>(null);
+  const dateFieldY = useRef(0);
+  const noteFieldY = useRef(0);
+  const scrollFieldIntoView = useCallback((y: number) => {
+    scrollRef.current?.scrollTo({ y: Math.max(0, y - 120), animated: true });
+  }, []);
 
   // Quick date shortcuts
   function setToday() {
@@ -177,6 +211,19 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
         note: noteTrimmed,
         raw_text: null,
       });
+
+      // Smart deduction: only for a NEW manual entry against a picked
+      // account. Uses Date.now() (not the transaction's own date) as the
+      // balance timestamp so it always wins over an older SMS-derived
+      // balance per setAccountBalance's newer-wins guard. Self-transfers
+      // don't move a single account's balance either direction.
+      if (selectedAccount && (type === 'expense' || type === 'income')) {
+        const current = getAccountBalance(selectedAccount);
+        if (current) {
+          const delta = type === 'expense' ? -amountNum : amountNum;
+          setAccountBalance(selectedAccount, current.balance + delta, Date.now());
+        }
+      }
     }
 
     DeviceEventEmitter.emit(DATA_CHANGED);
@@ -191,6 +238,7 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
     isEdit,
     tx,
     applyToAll,
+    selectedAccount,
     navigation,
   ]);
 
@@ -217,7 +265,13 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
   }, [isEdit, tx, navigation]);
 
   return (
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior="padding"
+      keyboardVerticalOffset={Platform.select({ ios: 0, android: 0 })}
+    >
     <ScrollView
+      ref={scrollRef}
       style={styles.container}
       contentContainerStyle={styles.content}
       keyboardShouldPersistTaps="handled"
@@ -294,11 +348,15 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
 
       {/* Date */}
       <SectionHeader title="Date & Time" />
-      <View style={styles.card}>
+      <View
+        style={styles.card}
+        onLayout={e => { dateFieldY.current = e.nativeEvent.layout.y; }}
+      >
         <TextInput
           style={styles.textInput}
           value={dateStr}
           onChangeText={setDateStr}
+          onFocus={() => scrollFieldIntoView(dateFieldY.current)}
           placeholder="YYYY-MM-DD HH:mm"
           placeholderTextColor={theme.colors.textMuted}
           keyboardType="default"
@@ -316,17 +374,46 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
 
       {/* Note */}
       <SectionHeader title="Note (optional)" />
-      <View style={styles.card}>
+      <View
+        style={styles.card}
+        onLayout={e => { noteFieldY.current = e.nativeEvent.layout.y; }}
+      >
         <TextInput
           style={[styles.textInput, styles.noteInput]}
           value={note}
           onChangeText={setNote}
+          onFocus={() => scrollFieldIntoView(noteFieldY.current)}
           placeholder="Add a note…"
           placeholderTextColor={theme.colors.textMuted}
           multiline
           returnKeyType="done"
         />
       </View>
+
+      {/* Account (new manual entries only) — deducts/adds the amount from
+          the picked account's last-known balance on save (6e). */}
+      {!isEdit && accounts.length > 0 && (type === 'expense' || type === 'income') && (
+        <>
+          <SectionHeader title="Account (optional)" />
+          <View style={[styles.card, styles.catCard]}>
+            <TouchableOpacity
+              onPress={() => setSelectedAccount(null)}
+              style={[styles.acctChip, selectedAccount === null ? styles.acctChipActive : undefined]}
+            >
+              <Text style={styles.acctChipText}>None</Text>
+            </TouchableOpacity>
+            {accounts.map(a => (
+              <TouchableOpacity
+                key={a.account}
+                onPress={() => setSelectedAccount(a.account)}
+                style={[styles.acctChip, selectedAccount === a.account ? styles.acctChipActive : undefined]}
+              >
+                <Text style={styles.acctChipText}>{a.account}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </>
+      )}
 
       {/* Apply category to all matching (edit only, category changed) */}
       {isEdit && (
@@ -357,6 +444,7 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
 
       <View style={styles.bottomPad} />
     </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -421,6 +509,22 @@ const styles = StyleSheet.create({
   },
   catChipActive: {
     opacity: 1,
+  },
+  acctChip: {
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.xs,
+    borderRadius: theme.radius.pill,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceAlt,
+  },
+  acctChipActive: {
+    borderColor: theme.colors.accent,
+    backgroundColor: theme.colors.accent + '22',
+  },
+  acctChipText: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textSecondary,
   },
   textInput: {
     fontSize: theme.font.size.md,

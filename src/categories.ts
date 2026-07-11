@@ -4,6 +4,7 @@ export type Category =
   | 'Food'
   | 'Groceries'
   | 'Transport'
+  | 'Uber'
   | 'Shopping'
   | 'Bills'
   | 'Entertainment'
@@ -18,6 +19,7 @@ export const CATEGORIES: Category[] = [
   'Food',
   'Groceries',
   'Transport',
+  'Uber',
   'Shopping',
   'Bills',
   'Entertainment',
@@ -44,6 +46,7 @@ export const CATEGORY_META: Record<Category, CategoryMeta> = {
   Food:          { color: '#FF6B35', icon: 'fast-food' },
   Groceries:     { color: '#4CAF50', icon: 'cart' },
   Transport:     { color: '#29B6F6', icon: 'car' },
+  Uber:          { color: '#212121', icon: 'car-sport' },
   Shopping:      { color: '#CE93D8', icon: 'bag' },
   Bills:         { color: '#FFB300', icon: 'receipt' },
   Entertainment: { color: '#F06292', icon: 'film' },
@@ -72,8 +75,14 @@ const KEYWORD_MAP: Array<{ keywords: string[]; category: Category }> = [
     category: 'Groceries',
   },
   {
+    // Checked before Transport (first match wins) so Uber rides get their
+    // own category; Ola/Rapido/fuel/etc. stay Transport.
+    keywords: ['uber'],
+    category: 'Uber',
+  },
+  {
     keywords: [
-      'uber', 'ola', 'irctc', 'fuel', 'petrol', 'diesel', 'metro', 'bus',
+      'ola', 'irctc', 'fuel', 'petrol', 'diesel', 'metro', 'bus',
       'rapido', 'taxi', 'cab', 'railway', 'flight', 'airline', 'redbus',
       'parking', 'toll', 'fastag',
     ],
