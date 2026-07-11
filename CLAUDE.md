@@ -8,7 +8,7 @@ Personal Android expense tracker. Intercepts SMS and app notifications, parses t
 - Kotlin native modules (SMS + Notification access — cannot use JS for these)
 - SQLite via **@op-engineering/op-sqlite** (the deprecated `react-native-quick-sqlite` is replaced by its maintained, New-Arch-ready successor by the same author)
 - React Navigation v7 (bottom tabs)
-- Charts: later (start with numbers; Victory Native / Skia optional)
+- Charts: `react-native-gifted-charts` (donut, trend line, bars) + `react-native-svg`
 
 ## Architecture (battery-first — see RULES.md §1)
 Capture is split from processing so the app works when closed WITHOUT draining battery:
@@ -26,21 +26,26 @@ The naive "emit to JS on every event" path is intentionally NOT the primary path
 3. EventBuffer.kt (shared SharedPreferences ring buffer) + ExpensePackage.kt (registers both modules in MainApplication.kt)
 
 ## Parser rules (TypeScript)
-- Amount: match `(?:Rs\.?|INR)\s*([\d,]+(?:\.\d{1,2})?)` 
-- Direction: "debited"/"spent"/"charged"/"sent" = expense, "credited"/"received" = income (ignore income for now)
-- Merchant: text after "at " or "to " or "towards " before next punctuation/end
+- Amount: `Rs./INR/₹` + digits, with optional lakh/crore magnitude suffix; amounts <= 0 rejected
+- Direction: "debited"/"spent"/"charged"/"sent"/"paid"/"purchase"/"withdrawn" = expense, "credited"/"received"/"refund" = income (income is tracked, not ignored — see RULES.md §3 for refund-direction handling)
+- Negative guard rejects promo "will be debited/credited", failed/OTP/autopay-registration messages before they become fake transactions
+- Merchant: text after "at "/"to "/"towards " (or "from " for income) before next punctuation/end
 - Source: sender ID (e.g. HDFCBK, ICICIB, Paytm)
-- Timestamp: system time at intercept
+- Timestamp: system time at intercept (single read shared by buffer + live emit)
 
-## DB Schema
-transactions(id, amount, merchant, source, raw_text, category, timestamp, type, dedup_key UNIQUE)
-- `dedup_key` = hash(source + amount + minute-bucket + raw_text); insert with `INSERT OR IGNORE` for idempotency
-- indices on timestamp and category; WAL mode
-categories: Food, Transport, Shopping, Bills, UPI, Other (auto-assign by keyword, editable)
+## DB Schema (v3 — see RULES.md §4 for full migration history)
+transactions(id, amount, merchant, source, raw_text, category, timestamp, type,
+  counterparty, account, note, category_source, channel, dedup_key UNIQUE)
+- `type`: 'expense' | 'income' | 'self'
+- `channel`: 'sms' | 'notification' | 'manual' | NULL (NULL for all pre-v3 history) — used only for cross-channel soft dedup
+- `dedup_key` = hash(source + amount + minute-bucket + raw_text); insert with `INSERT OR IGNORE` for idempotency (strict, always applies)
+- Soft cross-channel dedup (separate from dedup_key): drops an incoming row only when an existing row's channel is known and different from the incoming one — same-channel repeats are always kept
+- indices on timestamp, category, type; WAL mode
+- auxiliary tables: app_settings (key/value incl. per-account balances), merchant_rules (learned categorization), budgets
+categories: Food, Groceries, Transport, Uber, Shopping, Bills, Entertainment, Health, UPI, Cash, Income, Other (auto-assign by keyword, editable; Uber is its own category, checked before Transport)
 
 ## Permissions needed
 - android.permission.RECEIVE_SMS
-- android.permission.READ_SMS
 - Notification Access (NotificationListenerService — user grants manually in Settings)
 
 ## Rules
