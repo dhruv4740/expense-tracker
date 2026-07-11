@@ -66,6 +66,11 @@ yarn-error.log
 # testing
 /coverage
 
+# Generated build outputs that leak into src/main during release builds
+/android/app/src/main/assets/index.android.bundle
+/android/app/src/main/res/raw/keep.xml
+/android/app/src/main/res/drawable-*/node_modules_*
+
 # Yarn
 .yarn/*
 !.yarn/patches
