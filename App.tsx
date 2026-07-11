@@ -145,7 +145,6 @@ export default function App() {
       try {
         await PermissionsAndroid.requestMultiple([
           PermissionsAndroid.PERMISSIONS.RECEIVE_SMS,
-          PermissionsAndroid.PERMISSIONS.READ_SMS,
         ]);
       } catch {
         // user denied — app still works for notifications / manual entry

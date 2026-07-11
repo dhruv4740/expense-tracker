@@ -42,8 +42,31 @@ object EventBuffer {
         }
     }
 
-    /** Return all buffered events and clear the buffer atomically. */
-    fun drain(context: Context): JSONArray {
+    /**
+     * Return all buffered events WITHOUT clearing them. Pair with [ack] once the
+     * caller has durably processed (or safely given up on) the returned events —
+     * this two-phase contract means a crash between peek and ack leaves the
+     * events in the buffer for the next drain cycle instead of losing them.
+     */
+    fun peek(context: Context): JSONArray {
+        synchronized(lock) {
+            val prefs = context.applicationContext
+                .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            return try {
+                JSONArray(prefs.getString(KEY, "[]"))
+            } catch (e: Exception) {
+                JSONArray()
+            }
+        }
+    }
+
+    /**
+     * Remove the first [count] entries from the buffer. Re-reads the current
+     * array under the same lock (rather than trusting the caller's stale copy)
+     * so events appended between [peek] and [ack] are preserved, not dropped.
+     */
+    fun ack(context: Context, count: Int) {
+        if (count <= 0) return
         synchronized(lock) {
             val prefs = context.applicationContext
                 .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -52,7 +75,22 @@ object EventBuffer {
             } catch (e: Exception) {
                 JSONArray()
             }
-            prefs.edit().putString(KEY, "[]").apply()
+            val keepFrom = count.coerceAtMost(arr.length())
+            val remaining = JSONArray()
+            for (i in keepFrom until arr.length()) remaining.put(arr.get(i))
+            prefs.edit().putString(KEY, remaining.toString()).apply()
+        }
+    }
+
+    /**
+     * Return all buffered events and clear the buffer atomically.
+     * Kept for backward compatibility — delegates to peek + ack-all so any
+     * remaining caller behaves exactly as before.
+     */
+    fun drain(context: Context): JSONArray {
+        synchronized(lock) {
+            val arr = peek(context)
+            ack(context, arr.length())
             return arr
         }
     }

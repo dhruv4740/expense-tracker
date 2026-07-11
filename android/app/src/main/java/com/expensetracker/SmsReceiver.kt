@@ -21,12 +21,23 @@ import org.json.JSONObject
  */
 class SmsReceiver : BroadcastReceiver() {
 
+    companion object {
+        // Cheap, single pre-compiled regex gate: only SMS that look like they carry a
+        // currency amount get buffered. Keeps OTPs/personal texts out of the buffer
+        // entirely (privacy) and stops them from evicting real bank SMS out of the
+        // 500-slot ring buffer. No allowlist/prefs read here on purpose — SMS sender
+        // IDs vary too much to allowlist, and reading prefs would add I/O to this path.
+        private val HAS_AMOUNT_RE = Regex("(?i)(?:rs\\.?|inr|₹)\\s*[\\d,]")
+    }
+
     override fun onReceive(context: Context, intent: Intent) {
         val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent) ?: return
 
         // Concatenate multi-part SMS bodies; take sender from first part.
         val sender = messages.firstOrNull()?.displayOriginatingAddress ?: ""
         val body = messages.joinToString(separator = "") { it.messageBody ?: "" }
+
+        if (body.isBlank() || !HAS_AMOUNT_RE.containsMatchIn(body)) return
 
         val ts = System.currentTimeMillis()
 

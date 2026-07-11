@@ -56,30 +56,68 @@ class SmsModule(private val reactContext: ReactApplicationContext) :
      * Drains the shared EventBuffer for ALL event kinds (sms + notifications).
      * Each event is tagged with a `kind` field so JS can route accordingly.
      * Resolves with a WritableArray of WritableMap objects.
+     *
+     * @deprecated Prefer [peekBuffer] + [ackBuffer] — this clears the buffer
+     * before the caller has processed anything, so a crash mid-processing loses
+     * events. Kept only so an old call path (if any) keeps working.
      */
     @ReactMethod
     fun drainBuffer(promise: Promise) {
         try {
             val jsonArray = EventBuffer.drain(reactContext)
-            val result = Arguments.createArray()
-
-            for (i in 0 until jsonArray.length()) {
-                val obj = jsonArray.optJSONObject(i) ?: continue
-                val map = Arguments.createMap().apply {
-                    putString("kind", obj.optString("kind", "sms"))
-                    putString("sender", obj.optString("sender", ""))
-                    putString("pkg", obj.optString("pkg", ""))
-                    putString("title", obj.optString("title", ""))
-                    putString("body", obj.optString("body", ""))
-                    putDouble("ts", obj.optLong("ts", 0L).toDouble())
-                }
-                result.pushMap(map)
-            }
-
-            promise.resolve(result)
+            promise.resolve(toWritableArray(jsonArray))
         } catch (e: Exception) {
             promise.reject("DRAIN_ERROR", e.message, e)
         }
+    }
+
+    /**
+     * Returns all buffered events WITHOUT clearing the buffer. Pair with
+     * [ackBuffer] after the caller has durably processed the events so a
+     * crash mid-processing leaves them for the next sync cycle instead of
+     * losing them.
+     */
+    @ReactMethod
+    fun peekBuffer(promise: Promise) {
+        try {
+            val jsonArray = EventBuffer.peek(reactContext)
+            promise.resolve(toWritableArray(jsonArray))
+        } catch (e: Exception) {
+            promise.reject("PEEK_ERROR", e.message, e)
+        }
+    }
+
+    /**
+     * Removes the first [count] events from the buffer (in the same order
+     * returned by [peekBuffer]). Call after successfully processing them.
+     */
+    @ReactMethod
+    fun ackBuffer(count: Double, promise: Promise) {
+        try {
+            EventBuffer.ack(reactContext, count.toInt())
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("ACK_ERROR", e.message, e)
+        }
+    }
+
+    private fun toWritableArray(jsonArray: org.json.JSONArray) = Arguments.createArray().apply {
+        for (i in 0 until jsonArray.length()) {
+            val obj = jsonArray.optJSONObject(i) ?: continue
+            pushMap(Arguments.createMap().apply {
+                putString("kind", obj.optString("kind", "sms"))
+                putString("sender", obj.optString("sender", ""))
+                putString("pkg", obj.optString("pkg", ""))
+                putString("title", obj.optString("title", ""))
+                putString("body", obj.optString("body", ""))
+                putDouble("ts", obj.optLong("ts", 0L).toDouble())
+            })
+        }
+    }
+
+    override fun invalidate() {
+        if (instance === this) instance = null
+        super.invalidate()
     }
 
     /**

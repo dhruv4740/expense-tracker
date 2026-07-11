@@ -31,9 +31,30 @@ const { SmsModule } = NativeModules;
 /**
  * Drain the shared EventBuffer and return all buffered events (sms + notifications).
  * The buffer is cleared atomically on drain. Call on app open / foreground.
+ *
+ * @deprecated Prefer peekBuffer() + ackBuffer(count) — draining clears the buffer
+ * before the caller has processed anything, so a crash mid-processing loses events.
  */
 export function drainBuffer(): Promise<RawEvent[]> {
   return SmsModule.drainBuffer();
+}
+
+/**
+ * Return all buffered events WITHOUT clearing the buffer. Pair with ackBuffer()
+ * once the events have been durably processed (inserted into the DB) — this
+ * two-phase contract means a crash mid-processing leaves events for the next
+ * sync cycle instead of losing them.
+ */
+export function peekBuffer(): Promise<RawEvent[]> {
+  return SmsModule.peekBuffer();
+}
+
+/**
+ * Remove the first `count` events from the buffer (same order as peekBuffer()).
+ * Call after successfully processing them.
+ */
+export function ackBuffer(count: number): Promise<boolean> {
+  return SmsModule.ackBuffer(count);
 }
 
 const emitter = new NativeEventEmitter(SmsModule);

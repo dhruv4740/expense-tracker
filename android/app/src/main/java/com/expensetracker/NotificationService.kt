@@ -66,6 +66,11 @@ class NotificationService : NotificationListenerService() {
          * After the first call the result is cached; subsequent calls are O(1) set-lookup.
          * The cache is invalidated by [invalidateAllowlistCache] when the user edits the list.
          *
+         * Key ABSENT (never saved) ⇒ DEFAULT_ALLOWLIST.
+         * Key present but an EMPTY array ("[]") ⇒ capture is intentionally OFF — an
+         * empty set, no fallback to defaults. This lets the user turn off notification
+         * capture entirely by unchecking every app in Settings.
+         *
          * @param context Any Context — only applicationContext is used internally.
          */
         private fun effectiveAllowlist(context: Context): Set<String> {
@@ -82,7 +87,9 @@ class NotificationService : NotificationListenerService() {
                         val pkg = arr.optString(i)
                         if (pkg.isNotBlank()) set.add(pkg)
                     }
-                    if (set.isNotEmpty()) set else DEFAULT_ALLOWLIST
+                    // Do NOT fall back to defaults when the user explicitly saved an
+                    // empty list — that is the "capture off" state.
+                    set
                 } catch (_: Exception) {
                     DEFAULT_ALLOWLIST
                 }
@@ -115,18 +122,32 @@ class NotificationService : NotificationListenerService() {
         val extras = sbn.notification.extras
 
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()
-        val text: String? = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
-            ?: extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
+        val shortText = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
+        val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
+        // Some banks only put the amount in the big-text expanded body — prefer
+        // whichever variant is longer (falls back to whichever is non-null).
+        val text: String? = when {
+            !bigText.isNullOrBlank() && !shortText.isNullOrBlank() ->
+                if (bigText.length >= shortText.length) bigText else shortText
+            !bigText.isNullOrBlank() -> bigText
+            else -> shortText
+        }
 
         // Nothing to parse if body is absent.
         if (text.isNullOrBlank()) return
+
+        // Single timestamp read shared by the buffered event AND the live emit so
+        // both representations of the same notification agree to the millisecond —
+        // otherwise a minute-boundary straddle could make the two look like separate
+        // events to the dedup logic downstream.
+        val ts = System.currentTimeMillis()
 
         val event = JSONObject().apply {
             put("kind", "notification")
             put("pkg", sbn.packageName)
             put("title", title ?: "")
             put("body", text)
-            put("ts", System.currentTimeMillis())
+            put("ts", ts)
         }
 
         // Always write to the shared buffer (works with app closed, no wake lock needed).
@@ -139,7 +160,7 @@ class NotificationService : NotificationListenerService() {
                 putString("pkg", sbn.packageName)
                 putString("title", title ?: "")
                 putString("body", text)
-                putDouble("ts", System.currentTimeMillis().toDouble())
+                putDouble("ts", ts.toDouble())
             }
             NotificationModule.emitNotification(map)
         } catch (_: Exception) {

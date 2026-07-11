@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import com.facebook.react.bridge.ActivityEventListener
 import com.facebook.react.bridge.BaseActivityEventListener
+import com.facebook.react.bridge.LifecycleEventListener
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -64,8 +65,31 @@ class FileModule(private val reactContext: ReactApplicationContext) :
             }
         }
 
+    // If the host (Activity) is torn down while a picker is in flight — e.g. the
+    // OS kills the backgrounded app for memory, or a JS reload tears down the
+    // bridge — onActivityResult above never fires for the old request code, and
+    // pendingPromise would otherwise stay set forever, wedging every later
+    // saveTextFile/pickTextFile call with ERR_BUSY until the app is force-restarted.
+    // Clearing on host destroy makes the picker recoverable across that case.
+    private val lifecycleEventListener: LifecycleEventListener =
+        object : LifecycleEventListener {
+            override fun onHostResume() {}
+            override fun onHostPause() {}
+            override fun onHostDestroy() {
+                pendingPromise?.reject(ERR_BUSY, "Host destroyed while file operation was pending")
+                clearPending()
+            }
+        }
+
     init {
         reactContext.addActivityEventListener(activityEventListener)
+        reactContext.addLifecycleEventListener(lifecycleEventListener)
+    }
+
+    override fun invalidate() {
+        pendingPromise?.reject(ERR_BUSY, "Module invalidated while file operation was pending")
+        clearPending()
+        super.invalidate()
     }
 
     override fun getName(): String = "FileModule"

@@ -3,6 +3,7 @@ package com.expensetracker
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.provider.Settings
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
@@ -233,8 +234,15 @@ class NotificationModule(private val reactContext: ReactApplicationContext) :
             val launcherIntent = Intent(Intent.ACTION_MAIN).apply {
                 addCategory(Intent.CATEGORY_LAUNCHER)
             }
+            // MATCH_DEFAULT_ONLY filters to activities declaring CATEGORY_DEFAULT, which
+            // most launcher activities do NOT declare — that filtered the list down to
+            // near-empty. Flag 0 returns every matching launcher activity instead.
             @Suppress("QueryPermissionsNeeded")
-            val resolveInfoList = pm.queryIntentActivities(launcherIntent, PackageManager.MATCH_DEFAULT_ONLY)
+            val resolveInfoList = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.queryIntentActivities(launcherIntent, PackageManager.ResolveInfoFlags.of(0L))
+            } else {
+                pm.queryIntentActivities(launcherIntent, 0)
+            }
 
             val bankKeywords = setOf("bank", "pay", "upi", "wallet", "money", "hdfc", "icici", "sbi",
                 "axis", "kotak", "paytm", "phonepe", "gpay", "bhim", "freecharge", "mobikwik",
@@ -271,4 +279,9 @@ class NotificationModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun removeListeners(count: Int) {}
+
+    override fun invalidate() {
+        if (activeContext === reactContext) activeContext = null
+        super.invalidate()
+    }
 }

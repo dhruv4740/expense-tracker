@@ -1,18 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Android Auto Backup + Data Extraction rules.
-  Included by both android:dataExtractionRules (API 31+) and
-  android:fullBackupContent (API 23-30) in AndroidManifest.xml.
-
-  We back up:
-    - databases/ (op-sqlite stores expenses.db here — all transaction data)
-    - shared_prefs/expense_settings.xml (notification allowlist, identity, budgets)
-
-  We exclude:
-    - shared_prefs/com.facebook.* (React Native internal prefs — recreated at runtime)
-    - Everything else is transient / recreatable.
+  android:allowBackup is "false" in AndroidManifest.xml — this app is fully local
+  and financial data (transactions, raw SMS text) must never leave the device via
+  Google's cloud backup. This file is inert while allowBackup=false, but is kept
+  empty (rather than deleted) so a future accidental allowBackup=true doesn't
+  silently re-include the database.
 -->
 <full-backup-content>
-    <include domain="database" path="." />
-    <include domain="sharedpref" path="expense_settings.xml" />
 </full-backup-content>
