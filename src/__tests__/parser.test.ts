@@ -250,4 +250,28 @@ describe('parseTransaction', () => {
     expect(result!.merchant).not.toBe('10');
     expect(result!.merchant!.toUpperCase()).toContain('SWIGGY');
   });
+
+  // ── 28. "deposited" is an income keyword (NEFT salary credit) ────────────
+  it('parses a NEFT salary "deposited" credit as income with remitter as merchant', () => {
+    const body =
+      'Update! INR 34,600.00 deposited in HDFC Bank A/c XX3636 on 13-JUL-26 for NEFT Cr-CHAS0INBX01-1Flow, Inc.-DHRUV KOTHARI-CHASH00051620068.Avl bal INR 35,573.70. Cheque deposits in A/C are subject to clearing';
+    const result = parseTransaction('HDFCBK', body, 1752400000000);
+
+    expect(result).not.toBeNull();
+    expect(result!.isExpense).toBe(false);
+    expect(result!.amount).toBe(34600);
+    expect(result!.account).toBe('3636');
+    expect(result!.merchant).toBe('1Flow, Inc.');
+    expect(result!.balance).toBe(35573.70);
+  });
+
+  // ── 29. Plain "deposited" credit without NEFT narration ───────────────────
+  it('treats a plain "deposited" message (no NEFT narration) as income', () => {
+    const body = 'Rs.10,000 deposited in your account ending 4321.';
+    const result = parseTransaction('SBIBNK', body, Date.now());
+
+    expect(result).not.toBeNull();
+    expect(result!.isExpense).toBe(false);
+    expect(result!.amount).toBe(10000);
+  });
 });

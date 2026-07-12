@@ -82,7 +82,7 @@ const EXPENSE_RE =
   /\b(debited|spent|charged|sent|paid|purchase|withdrawn|w\/d)\b/i;
 
 /** Income direction keywords. */
-const INCOME_RE = /\b(credited|received|refund)\b/i;
+const INCOME_RE = /\b(credited|received|refund|deposited)\b/i;
 
 /**
  * Merchant: text immediately after "at ", "to ", "towards ", or (income only)
@@ -93,6 +93,14 @@ const INCOME_RE = /\b(credited|received|refund)\b/i;
  */
 const MERCHANT_RE_EXPENSE = /\b(?:at|to|towards)\s+(?!your\b)([^.,;:!\n]+)/gi;
 const MERCHANT_RE_INCOME = /\b(?:at|to|towards|from)\s+(?!your\b)([^.,;:!\n]+)/gi;
+
+/**
+ * NEFT/RTGS/IMPS credit narration: "NEFT Cr-<IFSC>-<remitter>-<beneficiary>-<UTR>".
+ * The remitter (payer) name is the field right after the IFSC, hyphen-delimited.
+ * Tried before the generic at/to/towards/from clause since narration-style
+ * credits (salary, vendor payouts) rarely contain those prepositions.
+ */
+const NEFT_REMITTER_RE = /\b(?:neft|rtgs|imps)\s*cr[-\s]+[a-z0-9]+-([^-]+)-/i;
 
 /** UPI VPA pattern: word.chars@word (at least 2-letter domain), not an email
  * (emails continue with a ".tld" after the domain; VPAs don't). */
@@ -169,8 +177,22 @@ function findCounterpartyPhone(body: string): string | null {
  * clause. Skips low-quality candidates: "your ..." clauses (excluded by the
  * regex itself) and purely-numeric fragments left over after ":" truncated a
  * time expression (e.g. "at 10:30 at SWIGGY" → skip "10", capture "SWIGGY").
+ *
+ * For income, an NEFT/RTGS/IMPS credit narration is tried first — those
+ * messages describe the remitter via a hyphen-delimited narration string
+ * rather than an "at/to/towards/from" clause (e.g. salary credits).
  */
 function extractMerchant(body: string, isExpense: boolean): string | null {
+  if (!isExpense) {
+    const neftMatch = body.match(NEFT_REMITTER_RE);
+    if (neftMatch) {
+      const raw = neftMatch[1].trim();
+      if (raw && !/^\d+$/.test(raw)) {
+        return raw;
+      }
+    }
+  }
+
   const re = isExpense ? MERCHANT_RE_EXPENSE : MERCHANT_RE_INCOME;
   re.lastIndex = 0;
   for (const m of body.matchAll(re)) {
