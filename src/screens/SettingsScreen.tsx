@@ -8,6 +8,7 @@ import {
   Alert,
   Modal,
   FlatList,
+  PermissionsAndroid,
   ScrollView,
   StyleSheet,
   Switch,
@@ -28,7 +29,7 @@ import type { Budget } from '../db';
 import { CATEGORIES } from '../categories';
 import { getIdentity, setIdentity } from '../settings';
 import type { Identity } from '../identity';
-import { refreshSyncCaches } from '../sync';
+import { refreshSyncCaches, rescanInbox } from '../sync';
 import { DATA_CHANGED } from '../sync';
 import { DeviceEventEmitter } from 'react-native';
 import {
@@ -128,6 +129,7 @@ export default function SettingsScreen() {
   // ── Data buttons ────────────────────────────────────────────────────────────
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [scanning, setScanning] = useState(false);
 
   const load = useCallback(async () => {
     // Profile
@@ -304,6 +306,38 @@ export default function SettingsScreen() {
         },
       ],
     );
+  }
+
+  // ── Inbox re-scan ────────────────────────────────────────────────────────────
+  async function handleScanInbox() {
+    setScanning(true);
+    try {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.READ_SMS,
+        {
+          title: 'Read SMS',
+          message:
+            'Scan your SMS inbox to recover transactions the app missed.',
+          buttonPositive: 'Allow',
+        },
+      );
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+        Alert.alert('Permission needed', 'SMS read access was not granted.');
+        return;
+      }
+      const count = await rescanInbox(30);
+      DeviceEventEmitter.emit(DATA_CHANGED);
+      Alert.alert(
+        'Scan complete',
+        count > 0
+          ? `Recovered ${count} transaction${count === 1 ? '' : 's'}.`
+          : 'No new transactions found in the last 30 days.',
+      );
+    } catch {
+      Alert.alert('Scan failed', 'Could not read the SMS inbox.');
+    } finally {
+      setScanning(false);
+    }
   }
 
   return (
@@ -533,6 +567,19 @@ export default function SettingsScreen() {
             <Icon name="upload" size={18} color={theme.colors.accent} />
           )}
           <Text style={styles.dataBtnText}>Restore from JSON</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.dataBtn, scanning ? styles.dataBtnDisabled : undefined]}
+          onPress={handleScanInbox}
+          disabled={scanning}
+        >
+          {scanning ? (
+            <ActivityIndicator size="small" color={theme.colors.accent} />
+          ) : (
+            <Icon name="download" size={18} color={theme.colors.accent} />
+          )}
+          <Text style={styles.dataBtnText}>Scan SMS inbox (last 30 days)</Text>
         </TouchableOpacity>
       </Card>
 
