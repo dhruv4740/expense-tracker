@@ -101,6 +101,50 @@ class SmsModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    /**
+     * Reads SMS from the device inbox with date >= [sinceTs] (ms), oldest first.
+     * Requires READ_SMS — the caller (JS) requests it via PermissionsAndroid
+     * before calling this. A SecurityException (permission somehow not
+     * granted) resolves an empty array rather than rejecting, since a scan
+     * finding nothing and a scan that can't run are both "nothing recovered"
+     * from the caller's perspective.
+     */
+    @ReactMethod
+    fun readInbox(sinceTs: Double, promise: Promise) {
+        try {
+            val resolver = reactContext.contentResolver
+            val uri = android.provider.Telephony.Sms.Inbox.CONTENT_URI
+            val projection = arrayOf(
+                android.provider.Telephony.Sms.ADDRESS,
+                android.provider.Telephony.Sms.BODY,
+                android.provider.Telephony.Sms.DATE,
+            )
+            val selection = "${android.provider.Telephony.Sms.DATE} >= ?"
+            val selectionArgs = arrayOf(sinceTs.toLong().toString())
+            val sortOrder = "${android.provider.Telephony.Sms.DATE} ASC"
+
+            val out = Arguments.createArray()
+            resolver.query(uri, projection, selection, selectionArgs, sortOrder)?.use { cursor ->
+                val addressIdx = cursor.getColumnIndexOrThrow(android.provider.Telephony.Sms.ADDRESS)
+                val bodyIdx = cursor.getColumnIndexOrThrow(android.provider.Telephony.Sms.BODY)
+                val dateIdx = cursor.getColumnIndexOrThrow(android.provider.Telephony.Sms.DATE)
+                while (cursor.moveToNext()) {
+                    out.pushMap(Arguments.createMap().apply {
+                        putString("kind", "sms")
+                        putString("sender", cursor.getString(addressIdx) ?: "")
+                        putString("body", cursor.getString(bodyIdx) ?: "")
+                        putDouble("ts", cursor.getLong(dateIdx).toDouble())
+                    })
+                }
+            }
+            promise.resolve(out)
+        } catch (e: SecurityException) {
+            promise.resolve(Arguments.createArray())
+        } catch (e: Exception) {
+            promise.reject("READ_INBOX_ERROR", e.message, e)
+        }
+    }
+
     private fun toWritableArray(jsonArray: org.json.JSONArray) = Arguments.createArray().apply {
         for (i in 0 until jsonArray.length()) {
             val obj = jsonArray.optJSONObject(i) ?: continue

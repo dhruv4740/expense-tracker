@@ -67,3 +67,13 @@ const emitter = new NativeEventEmitter(SmsModule);
 export function onSmsReceived(cb: (e: RawEvent) => void) {
   return emitter.addListener('SmsReceived', cb);
 }
+
+/**
+ * Reads SMS from the device inbox with date >= sinceTs (ms), oldest first.
+ * Requires READ_SMS — request it via PermissionsAndroid before calling.
+ * Used by the Settings "Scan SMS inbox" action to recover messages the
+ * capture path missed (e.g. a parser gap that has since been fixed).
+ */
+export function readInbox(sinceTs: number): Promise<RawEvent[]> {
+  return SmsModule.readInbox(sinceTs);
+}

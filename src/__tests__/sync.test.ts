@@ -11,6 +11,7 @@ jest.mock('../native/SmsModule', () => ({
   peekBuffer: jest.fn(),
   ackBuffer: jest.fn(),
   onSmsReceived: jest.fn(() => ({ remove: jest.fn() })),
+  readInbox: jest.fn(),
 }));
 
 jest.mock('../native/NotificationModule', () => ({
@@ -21,20 +22,23 @@ jest.mock('../db', () => ({
   insertTransaction: jest.fn(() => true),
   getAllMerchantRules: jest.fn(() => ({})),
   setAccountBalance: jest.fn(),
+  hasRawText: jest.fn(() => false),
 }));
 
 jest.mock('../settings', () => ({
   getIdentity: jest.fn(() => ({ name: '', phones: [], upiHandles: [], accountLast4: [] })),
 }));
 
-import { syncBuffer } from '../sync';
-import { peekBuffer, ackBuffer } from '../native/SmsModule';
-import { insertTransaction } from '../db';
+import { syncBuffer, rescanInbox } from '../sync';
+import { peekBuffer, ackBuffer, readInbox } from '../native/SmsModule';
+import { insertTransaction, hasRawText } from '../db';
 import type { RawEvent } from '../native/SmsModule';
 
 const mockedPeek = peekBuffer as jest.Mock;
 const mockedAck = ackBuffer as jest.Mock;
 const mockedInsert = insertTransaction as jest.Mock;
+const mockedReadInbox = readInbox as jest.Mock;
+const mockedHasRawText = hasRawText as jest.Mock;
 
 function bankEvent(overrides: Partial<RawEvent> = {}): RawEvent {
   return {
@@ -51,6 +55,9 @@ beforeEach(() => {
   mockedAck.mockReset();
   mockedInsert.mockReset();
   mockedInsert.mockReturnValue(true);
+  mockedReadInbox.mockReset();
+  mockedHasRawText.mockReset();
+  mockedHasRawText.mockReturnValue(false);
 });
 
 describe('syncBuffer', () => {
@@ -96,5 +103,50 @@ describe('syncBuffer', () => {
 
     expect(inserted).toBe(0);
     expect(mockedAck).not.toHaveBeenCalled();
+  });
+});
+
+describe('rescanInbox', () => {
+  it('inserts messages not already stored', async () => {
+    mockedReadInbox.mockResolvedValue([bankEvent(), bankEvent()]);
+    mockedHasRawText.mockReturnValue(false);
+
+    const inserted = await rescanInbox();
+
+    expect(inserted).toBe(2);
+    expect(mockedInsert).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips messages already present by (source, raw_text) — repeat scans recover nothing new', async () => {
+    mockedReadInbox.mockResolvedValue([bankEvent(), bankEvent()]);
+    mockedHasRawText.mockReturnValue(true);
+
+    const inserted = await rescanInbox();
+
+    expect(inserted).toBe(0);
+    expect(mockedInsert).not.toHaveBeenCalled();
+  });
+
+  it('skips non-transaction messages without inserting', async () => {
+    mockedReadInbox.mockResolvedValue([
+      bankEvent({ body: 'Your OTP is 123456. Do not share it.' }),
+    ]);
+    mockedHasRawText.mockReturnValue(false);
+
+    const inserted = await rescanInbox();
+
+    expect(inserted).toBe(0);
+    expect(mockedInsert).not.toHaveBeenCalled();
+  });
+
+  it('passes a since-timestamp roughly `days` in the past to readInbox', async () => {
+    mockedReadInbox.mockResolvedValue([]);
+    const before = Date.now();
+
+    await rescanInbox(30);
+
+    const sinceTs = mockedReadInbox.mock.calls[0][0] as number;
+    const expected = before - 30 * 24 * 60 * 60 * 1000;
+    expect(Math.abs(sinceTs - expected)).toBeLessThan(5000);
   });
 });

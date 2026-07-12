@@ -655,6 +655,22 @@ export function getRecurring(range: Range, minOccurrences = 2): RecurringEntry[]
   });
 }
 
+/**
+ * True if a row with this exact (source, raw_text) already exists. Used by
+ * the inbox re-scan to skip messages already captured live/from the buffer —
+ * a re-scanned message's timestamp is the SMS `date`, which can land in a
+ * different minute-bucket than the original capture-time timestamp, so the
+ * strict dedup_key alone can't be relied on to catch it.
+ */
+export function hasRawText(source: string | null, raw_text: string | null): boolean {
+  const conn = requireDb();
+  const res = conn.executeSync(
+    'SELECT 1 FROM transactions WHERE source = ? AND raw_text = ? LIMIT 1',
+    [source, raw_text],
+  );
+  return (res.rows ?? []).length > 0;
+}
+
 /** Count transactions with category='Other' (the uncategorized review queue). */
 export function getUncategorizedCount(): number {
   const conn = requireDb();

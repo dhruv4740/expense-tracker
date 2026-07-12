@@ -14,10 +14,10 @@
  * Any successful insert emits DATA_CHANGED so focused screens can refresh in place.
  */
 import { DeviceEventEmitter } from 'react-native';
-import { peekBuffer, ackBuffer, onSmsReceived, type RawEvent } from './native/SmsModule';
+import { peekBuffer, ackBuffer, onSmsReceived, readInbox, type RawEvent } from './native/SmsModule';
 import { onNotificationReceived } from './native/NotificationModule';
 import { parseTransaction } from './parser';
-import { insertTransaction, getAllMerchantRules, setAccountBalance } from './db';
+import { insertTransaction, getAllMerchantRules, setAccountBalance, hasRawText } from './db';
 import { categorize } from './categories';
 import type { Category } from './categories';
 import { isSelfTransfer } from './identity';
@@ -182,4 +182,46 @@ export function subscribeLiveEvents(): () => void {
     }),
   ];
   return () => subs.forEach(s => s.remove());
+}
+
+/**
+ * Re-reads the device SMS inbox for the last [days] days and runs any message
+ * not already stored through the normal parse → categorize → insert pipeline.
+ * Recovers messages a past parser gap silently dropped (they never reached
+ * the DB, so dedup_key never saw them and syncBuffer can't help — the raw
+ * event is long gone from the EventBuffer).
+ *
+ * A message already present is skipped by exact (source, raw_text) match
+ * BEFORE parsing/inserting — not just relying on dedup_key — because a
+ * re-scanned message's timestamp is the SMS provider's `date`, which can
+ * fall in a different minute-bucket than the original capture-time
+ * timestamp, so the strict dedup_key alone wouldn't catch it. This is what
+ * makes repeated scans idempotent: running it twice in a row recovers 0 the
+ * second time.
+ *
+ * @returns Number of new rows inserted.
+ */
+export async function rescanInbox(days = 30): Promise<number> {
+  refreshSyncCaches();
+
+  const sinceTs = Date.now() - days * 24 * 60 * 60 * 1000;
+  const events = await readInbox(sinceTs);
+
+  let inserted = 0;
+  for (const e of events) {
+    if (hasRawText(e.sender ?? null, e.body ?? null)) {
+      continue;
+    }
+    try {
+      if (processOne(e)) {
+        inserted++;
+      }
+    } catch {
+      // One malformed message doesn't kill the scan — skip and move on.
+    }
+  }
+  if (inserted > 0) {
+    DeviceEventEmitter.emit(DATA_CHANGED);
+  }
+  return inserted;
 }
