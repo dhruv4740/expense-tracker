@@ -425,10 +425,16 @@ export function getSummary(range: Range): Summary {
   const spent = Number(totRow.spent ?? 0);
   const received = Number(totRow.received ?? 0);
 
+  // Nets income against expense within the same category (e.g. a debit and a
+  // credit both tagged "Uber" cancel out) so a category's total reflects what
+  // it actually cost net of any money credited back under that same tag.
   const catRes = conn.executeSync(
-    `SELECT category, SUM(amount) AS total
+    `SELECT category,
+            SUM(CASE WHEN type = 'expense' THEN amount
+                     WHEN type = 'income'  THEN -amount
+                     ELSE 0 END) AS total
        FROM transactions
-      WHERE type = 'expense' AND timestamp BETWEEN ? AND ?
+      WHERE type IN ('expense', 'income') AND timestamp BETWEEN ? AND ?
       GROUP BY category
       ORDER BY total DESC`,
     [from, to],
