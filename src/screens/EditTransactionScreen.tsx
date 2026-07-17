@@ -17,6 +17,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../App';
 
@@ -35,7 +36,7 @@ import { CATEGORIES } from '../categories';
 import type { Category } from '../categories';
 import { normalizeMerchantKey } from '../categories';
 import { DATA_CHANGED, refreshSyncCaches } from '../sync';
-import { CategoryChip, SectionHeader } from '../components';
+import { CategoryChip, Icon, SectionHeader } from '../components';
 import { theme } from '../theme';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -52,30 +53,22 @@ const TYPE_SEGMENTS: SegType[] = [
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
-/** Format epoch ms → 'YYYY-MM-DD HH:mm' */
-function tsToString(ts: number): string {
-  const d = new Date(ts);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+/** Format epoch ms → e.g. '17 Jul 2026' */
+function formatDate(ts: number): string {
+  return new Date(ts).toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
 }
 
-/** Parse 'YYYY-MM-DD HH:mm' → epoch ms, returns NaN on failure */
-function stringToTs(s: string): number {
-  const trimmed = s.trim();
-  // accept 'YYYY-MM-DD' or 'YYYY-MM-DD HH:mm'
-  const [datePart, timePart = '00:00'] = trimmed.split(' ');
-  const [year, month, day] = datePart.split('-').map(Number);
-  const [hours, minutes] = timePart.split(':').map(Number);
-  if (
-    isNaN(year) ||
-    isNaN(month) ||
-    isNaN(day) ||
-    isNaN(hours) ||
-    isNaN(minutes)
-  ) {
-    return NaN;
-  }
-  return new Date(year, month - 1, day, hours, minutes).getTime();
+/** Format epoch ms → e.g. '2:30 PM' */
+function formatTime(ts: number): string {
+  return new Date(ts).toLocaleTimeString('en-IN', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
 }
 
 // ─── Screen ──────────────────────────────────────────────────────────────────
@@ -89,7 +82,7 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
   const [category, setCategory] = useState<string>(tx?.category ?? 'Other');
   const [merchant, setMerchant] = useState(tx?.merchant ?? '');
   const [note, setNote] = useState(tx?.note ?? '');
-  const [dateStr, setDateStr] = useState(tsToString(tx?.timestamp ?? Date.now()));
+  const [timestamp, setTimestamp] = useState(tx?.timestamp ?? Date.now());
   const [applyToAll, setApplyToAll] = useState(false);
 
   // Account picker — new manual entries only (6e). Editing an existing row
@@ -108,48 +101,76 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
     }
   }, [isEdit]);
 
-  // Keyboard-safe scrolling (6a): the Date field sits near the bottom of the
-  // form and nothing lifted the screen above the keyboard, so the user typed
-  // blind. Track each field's Y position on layout and scroll it into view
-  // on focus — RN 0.86 edge-to-edge on Android 15 ignores adjustResize, so
-  // the manifest setting alone doesn't fix this; KeyboardAvoidingView +
-  // manual scroll-into-view does.
+  // Keyboard-safe scrolling (6a): the Note field can sit near the bottom of
+  // the form and nothing lifted the screen above the keyboard, so the user
+  // typed blind. Track its Y position on layout and scroll it into view on
+  // focus — RN 0.86 edge-to-edge on Android 15 ignores adjustResize, so the
+  // manifest setting alone doesn't fix this; KeyboardAvoidingView + manual
+  // scroll-into-view does.
   const scrollRef = useRef<ScrollView>(null);
-  const dateFieldY = useRef(0);
   const noteFieldY = useRef(0);
   const scrollFieldIntoView = useCallback((y: number) => {
     scrollRef.current?.scrollTo({ y: Math.max(0, y - 120), animated: true });
   }, []);
 
-  // Quick date shortcuts
+  // Quick date shortcuts — keep the current time-of-day, only move the date.
   function setToday() {
     const now = new Date();
-    const original = new Date(tx?.timestamp ?? Date.now());
+    const original = new Date(timestamp);
     now.setHours(original.getHours(), original.getMinutes(), 0, 0);
-    setDateStr(tsToString(now.getTime()));
+    setTimestamp(now.getTime());
   }
 
   function setYesterday() {
     const d = new Date();
     d.setDate(d.getDate() - 1);
-    const original = new Date(tx?.timestamp ?? Date.now());
+    const original = new Date(timestamp);
     d.setHours(original.getHours(), original.getMinutes(), 0, 0);
-    setDateStr(tsToString(d.getTime()));
+    setTimestamp(d.getTime());
+  }
+
+  // Native calendar / clock dialogs (Android). Each merges the picked
+  // date-or-time part into the current timestamp, leaving the other part
+  // untouched — picking a new date shouldn't reset the time and vice versa.
+  function openDatePicker() {
+    DateTimePickerAndroid.open({
+      value: new Date(timestamp),
+      mode: 'date',
+      onChange: (event, selected) => {
+        if (event.type !== 'set' || !selected) {
+          return;
+        }
+        setTimestamp(prev => {
+          const d = new Date(prev);
+          d.setFullYear(selected.getFullYear(), selected.getMonth(), selected.getDate());
+          return d.getTime();
+        });
+      },
+    });
+  }
+
+  function openTimePicker() {
+    DateTimePickerAndroid.open({
+      value: new Date(timestamp),
+      mode: 'time',
+      is24Hour: false,
+      onChange: (event, selected) => {
+        if (event.type !== 'set' || !selected) {
+          return;
+        }
+        setTimestamp(prev => {
+          const d = new Date(prev);
+          d.setHours(selected.getHours(), selected.getMinutes(), 0, 0);
+          return d.getTime();
+        });
+      },
+    });
   }
 
   const handleSave = useCallback(() => {
     const amountNum = parseFloat(amount);
     if (isNaN(amountNum) || amountNum <= 0) {
       Alert.alert('Invalid amount', 'Please enter a valid amount greater than 0.');
-      return;
-    }
-
-    const timestamp = stringToTs(dateStr);
-    if (isNaN(timestamp)) {
-      Alert.alert(
-        'Invalid date',
-        'Enter date as YYYY-MM-DD or YYYY-MM-DD HH:mm',
-      );
       return;
     }
 
@@ -234,7 +255,7 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
     category,
     merchant,
     note,
-    dateStr,
+    timestamp,
     isEdit,
     tx,
     applyToAll,
@@ -348,20 +369,16 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
 
       {/* Date */}
       <SectionHeader title="Date & Time" />
-      <View
-        style={styles.card}
-        onLayout={e => { dateFieldY.current = e.nativeEvent.layout.y; }}
-      >
-        <TextInput
-          style={styles.textInput}
-          value={dateStr}
-          onChangeText={setDateStr}
-          onFocus={() => scrollFieldIntoView(dateFieldY.current)}
-          placeholder="YYYY-MM-DD HH:mm"
-          placeholderTextColor={theme.colors.textMuted}
-          keyboardType="default"
-          returnKeyType="next"
-        />
+      <View style={styles.card}>
+        <View style={styles.dateTimeRow}>
+          <TouchableOpacity style={styles.dateTimeBtn} onPress={openDatePicker}>
+            <Icon name="calendar" size={16} color={theme.colors.accent} />
+            <Text style={styles.dateTimeText}>{formatDate(timestamp)}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.dateTimeBtn} onPress={openTimePicker}>
+            <Text style={styles.dateTimeText}>{formatTime(timestamp)}</Text>
+          </TouchableOpacity>
+        </View>
         <View style={styles.dateShortcuts}>
           <TouchableOpacity style={styles.shortcutBtn} onPress={setToday}>
             <Text style={styles.shortcutText}>Today</Text>
@@ -535,6 +552,27 @@ const styles = StyleSheet.create({
   noteInput: {
     minHeight: 64,
     textAlignVertical: 'top',
+  },
+  dateTimeRow: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+  },
+  dateTimeBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.xs,
+    paddingVertical: theme.spacing.sm + 2,
+    borderRadius: theme.radius.sm,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceAlt,
+  },
+  dateTimeText: {
+    fontSize: theme.font.size.md,
+    color: theme.colors.textPrimary,
+    fontWeight: theme.font.weight.medium,
   },
   dateShortcuts: {
     flexDirection: 'row',
