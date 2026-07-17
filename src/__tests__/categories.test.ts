@@ -12,7 +12,8 @@ describe('CATEGORIES', () => {
   it('includes all expected category values', () => {
     const expected: Category[] = [
       'Food', 'Groceries', 'Transport', 'Shopping', 'Bills',
-      'Entertainment', 'Health', 'UPI', 'Cash', 'Income', 'Other',
+      'Entertainment', 'Health', 'UPI', 'Cash', 'Income',
+      'Friend Transfer', 'Loan/Dues', 'Other',
     ];
     for (const cat of expected) {
       expect(CATEGORIES).toContain(cat);

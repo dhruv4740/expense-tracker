@@ -12,6 +12,8 @@ export type Category =
   | 'UPI'
   | 'Cash'
   | 'Income'
+  | 'Friend Transfer'
+  | 'Loan/Dues'
   | 'Other';
 
 /** Ordered list of all Category values (used for filter chips, dropdowns, etc.). */
@@ -27,6 +29,8 @@ export const CATEGORIES: Category[] = [
   'UPI',
   'Cash',
   'Income',
+  'Friend Transfer',
+  'Loan/Dues',
   'Other',
 ];
 
@@ -54,6 +58,8 @@ export const CATEGORY_META: Record<Category, CategoryMeta> = {
   UPI:           { color: '#7E57C2', icon: 'swap-horizontal' },
   Cash:          { color: '#A5D6A7', icon: 'cash' },
   Income:        { color: '#66BB6A', icon: 'trending-up' },
+  'Friend Transfer': { color: '#26A69A', icon: 'person' },
+  'Loan/Dues':   { color: '#8D6E63', icon: 'wallet' },
   Other:         { color: '#78909C', icon: 'ellipsis-horizontal' },
 };
 
