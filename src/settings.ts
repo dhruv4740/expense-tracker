@@ -70,3 +70,25 @@ export function getIdentity(): Identity {
 export function setIdentity(identity: Identity): void {
   setJSON(IDENTITY_KEY, identity);
 }
+
+// ─── Dismissed capture apps ────────────────────────────────────────────────────
+
+const DISMISSED_APPS_KEY = 'dismissedApps';
+
+/**
+ * Package names the user has explicitly removed from the notification
+ * capture allowlist screen. Separate from the allowlist itself (SharedPreferences
+ * on the native side) because a bank-detected app would otherwise always
+ * reappear in the list regardless of its enabled/disabled toggle state.
+ */
+export function getDismissedApps(): string[] {
+  const stored = getJSON<string[]>(DISMISSED_APPS_KEY, []);
+  return Array.isArray(stored) ? stored : [];
+}
+
+/**
+ * Persist the set of dismissed package names.
+ */
+export function setDismissedApps(pkgs: string[]): void {
+  setJSON(DISMISSED_APPS_KEY, pkgs);
+}

@@ -26,7 +26,7 @@ import {
 } from '../db';
 import type { Budget } from '../db';
 import { CATEGORIES } from '../categories';
-import { getIdentity, setIdentity } from '../settings';
+import { getIdentity, setIdentity, getDismissedApps, setDismissedApps } from '../settings';
 import type { Identity } from '../identity';
 import { refreshSyncCaches } from '../sync';
 import { DATA_CHANGED } from '../sync';
@@ -159,10 +159,14 @@ export default function SettingsScreen() {
         getAllowlist(),
       ]);
       const enabledSet = new Set(enabled);
+      const dismissedSet = new Set(getDismissedApps());
       // Store all installed for the "Add app" picker
       setAllInstalledApps(installed);
-      // Show bank-likely apps + anything the user already enabled (even non-bank)
-      const bankOrEnabled = installed.filter(a => a.isLikelyBank || enabledSet.has(a.pkg));
+      // Show bank-likely apps + anything the user already enabled (even non-bank),
+      // minus anything the user explicitly deleted from the list.
+      const bankOrEnabled = installed
+        .filter(a => a.isLikelyBank || enabledSet.has(a.pkg))
+        .filter(a => !dismissedSet.has(a.pkg));
       setAllowlistState(
         bankOrEnabled.map(a => ({ ...a, enabled: enabledSet.has(a.pkg) })),
       );
@@ -249,6 +253,21 @@ export default function SettingsScreen() {
       { pkg: app.pkg, label: app.label, enabled: true, isLikelyBank: app.isLikelyBank },
     ];
     setAllowlistState(updated);
+    // Re-adding a previously deleted app un-dismisses it.
+    setDismissedApps(getDismissedApps().filter(p => p !== app.pkg));
+    const enabledPkgs = updated.filter(e => e.enabled).map(e => e.pkg);
+    try {
+      await setAllowlist(enabledPkgs);
+    } catch {
+      setAllowlistState(allowlist);
+    }
+  }
+
+  // ── Delete app from list ─────────────────────────────────────────────────────
+  async function handleDeleteApp(pkg: string) {
+    const updated = allowlist.filter(e => e.pkg !== pkg);
+    setAllowlistState(updated);
+    setDismissedApps([...getDismissedApps(), pkg]);
     const enabledPkgs = updated.filter(e => e.enabled).map(e => e.pkg);
     try {
       await setAllowlist(enabledPkgs);
@@ -387,12 +406,20 @@ export default function SettingsScreen() {
                   <Text style={styles.allowBankTag}>Bank / UPI</Text>
                 )}
               </View>
-              <Switch
-                value={entry.enabled}
-                onValueChange={v => handleAllowlistToggle(entry.pkg, v)}
-                trackColor={{ true: theme.colors.accent, false: theme.colors.surfaceAlt }}
-                thumbColor={theme.colors.textPrimary}
-              />
+              <View style={styles.allowRowActions}>
+                <Switch
+                  value={entry.enabled}
+                  onValueChange={v => handleAllowlistToggle(entry.pkg, v)}
+                  trackColor={{ true: theme.colors.accent, false: theme.colors.surfaceAlt }}
+                  thumbColor={theme.colors.textPrimary}
+                />
+                <TouchableOpacity
+                  onPress={() => handleDeleteApp(entry.pkg)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Icon name="trash" size={18} color={theme.colors.danger} />
+                </TouchableOpacity>
+              </View>
             </View>
           ))
         )}
@@ -590,6 +617,11 @@ const styles = StyleSheet.create({
     flex: 1,
     marginRight: theme.spacing.md,
     gap: 2,
+  },
+  allowRowActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
   },
   allowLabel: {
     fontSize: theme.font.size.md,
