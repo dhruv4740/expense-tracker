@@ -112,11 +112,17 @@ const PHONE_RE = /(?<![\d])(?:(?:\+91|0)\s*)?([6-9]\d{9})(?!\d)/g;
 const REF_NUMBER_CONTEXT_RE = /(?:ref|utr|rrn|txn)[^a-z0-9]{0,6}$/i;
 
 /**
- * Counterparty account fragment from message text:
- * "a/c 1234", "acct 9876", "account 0012" — 3-4 trailing digits.
- * This regex is used for COUNTERPARTY extraction only when VPA/phone are absent.
+ * Counterparty account fragment from message text — directional so the
+ * USER's own account (referenced as "your A/c XX1234", "A/c XX1234 debited",
+ * with no to/from clause) is never mistaken for the other party. Only "to
+ * a/c ..." (expense) / "from a/c ..." (income) clauses count as a
+ * counterparty account. Gap bounded to 10 chars so it can't jump across an
+ * unrelated sentence to grab an unrelated account number.
  */
-const COUNTERPARTY_ACCT_RE = /(?:a\/c|acct|account)[^\d]*(\d{3,4})\b/i;
+const COUNTERPARTY_ACCT_EXPENSE_RE =
+  /\bto\s+(?:a\/c|acct|account)[^\d]{0,10}(\d{3,4})\b/i;
+const COUNTERPARTY_ACCT_INCOME_RE =
+  /\bfrom\s+(?:a\/c|acct|account)[^\d]{0,10}(\d{3,4})\b/i;
 
 /**
  * The USER's own account hint: "A/c XX1234", "account ending 1234",
@@ -255,7 +261,13 @@ export function parseTransaction(
     isExpense = isExpenseKeyword;
   }
 
-  // ── 3. Counterparty (priority: VPA > phone > account fragment) ─────────────
+  // ── 3. User's own account hint (computed first so the counterparty fallback
+  //      below can be checked against it and never mistake "your account" for
+  //      the other party) ────────────────────────────────────────────────────
+  const userAcctMatch = body.match(USER_ACCT_RE);
+  const account: string | null = userAcctMatch ? userAcctMatch[1] : null;
+
+  // ── 4. Counterparty (priority: VPA > phone > directional account fragment) ─
   let counterparty: string | null = null;
 
   const vpaMatch = body.match(VPA_RE);
@@ -266,16 +278,15 @@ export function parseTransaction(
     if (phoneDigits) {
       counterparty = phoneDigits;
     } else {
-      const ctAcctMatch = body.match(COUNTERPARTY_ACCT_RE);
-      if (ctAcctMatch) {
+      const ctAcctRe = isExpense
+        ? COUNTERPARTY_ACCT_EXPENSE_RE
+        : COUNTERPARTY_ACCT_INCOME_RE;
+      const ctAcctMatch = body.match(ctAcctRe);
+      if (ctAcctMatch && ctAcctMatch[1] !== account) {
         counterparty = ctAcctMatch[1];
       }
     }
   }
-
-  // ── 4. User's own account hint ─────────────────────────────────────────────
-  const userAcctMatch = body.match(USER_ACCT_RE);
-  const account: string | null = userAcctMatch ? userAcctMatch[1] : null;
 
   // ── 5. Merchant ────────────────────────────────────────────────────────────
   const merchant = extractMerchant(body, isExpense);

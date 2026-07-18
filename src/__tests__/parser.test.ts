@@ -132,6 +132,34 @@ describe('parseTransaction', () => {
     expect(result!.account).toBe('1234');
   });
 
+  // ── 13b. Own account is never mistaken for counterparty ───────────────────
+  it('does not capture own account as counterparty when there is no to/from a/c clause', () => {
+    const body =
+      'Rs.750 debited. Your A/c XX1234 has been debited for NETFLIX.';
+    const result = parseTransaction('HDFCBK', body, 1719500000000);
+
+    expect(result).not.toBeNull();
+    expect(result!.counterparty).toBeNull();
+  });
+
+  it('does not capture own account as counterparty for "debited from A/c XX1234 to ICCL"', () => {
+    const body = 'Rs.3000 debited from A/c XX1234 to ICCL - Mutual Funds.';
+    const result = parseTransaction('HDFCBK', body, 1719500000000);
+
+    expect(result).not.toBeNull();
+    expect(result!.account).toBe('1234');
+    expect(result!.counterparty).toBeNull();
+  });
+
+  it('extracts a genuine counterparty account fragment on income: "credited from a/c 5678"', () => {
+    const body = 'Rs.2000 credited from a/c 5678 to your account.';
+    const result = parseTransaction('HDFCBK', body, 1719500000000);
+
+    expect(result).not.toBeNull();
+    expect(result!.isExpense).toBe(false);
+    expect(result!.counterparty).toBe('5678');
+  });
+
   // ── 14. "withdrawn" keyword → expense ────────────────────────────────────
   it('"withdrawn" keyword is treated as an expense direction', () => {
     const body = 'Rs.5000.00 withdrawn at ATM. A/c XX9012 debited.';
