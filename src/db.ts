@@ -36,9 +36,15 @@ export interface Summary {
   spent: number;
   received: number;
   net: number;
+  /** Sum of expense-type Investment-category transactions in the range —
+   * tracked separately since SIPs/mutual funds aren't "spending". */
+  invested: number;
   byCategory: { category: string; total: number }[];
   byDay: { day: number; total: number }[];
 }
+
+/** Category excluded from spend totals/charts (tracked separately as `invested`). */
+const INVESTMENT_CATEGORY = 'Investment';
 
 export interface Budget {
   category: string;
@@ -415,29 +421,33 @@ export function getSummary(range: Range): Summary {
 
   const totalsRes = conn.executeSync(
     `SELECT
-        COALESCE(SUM(CASE WHEN type = 'expense' THEN amount END), 0) AS spent,
-        COALESCE(SUM(CASE WHEN type = 'income'  THEN amount END), 0) AS received
+        COALESCE(SUM(CASE WHEN type = 'expense' AND category != ? THEN amount END), 0) AS spent,
+        COALESCE(SUM(CASE WHEN type = 'income'  THEN amount END), 0) AS received,
+        COALESCE(SUM(CASE WHEN type = 'expense' AND category = ?  THEN amount END), 0) AS invested
        FROM transactions
       WHERE timestamp BETWEEN ? AND ?`,
-    [from, to],
+    [INVESTMENT_CATEGORY, INVESTMENT_CATEGORY, from, to],
   );
   const totRow = (totalsRes.rows ?? [])[0] ?? {};
   const spent = Number(totRow.spent ?? 0);
   const received = Number(totRow.received ?? 0);
+  const invested = Number(totRow.invested ?? 0);
 
   // Nets income against expense within the same category (e.g. a debit and a
   // credit both tagged "Uber" cancel out) so a category's total reflects what
   // it actually cost net of any money credited back under that same tag.
+  // Investment is excluded here (and from spent/byDay) so SIPs/mutual funds
+  // don't count as "spending" — see the separate `invested` total above.
   const catRes = conn.executeSync(
     `SELECT category,
             SUM(CASE WHEN type = 'expense' THEN amount
                      WHEN type = 'income'  THEN -amount
                      ELSE 0 END) AS total
        FROM transactions
-      WHERE type IN ('expense', 'income') AND timestamp BETWEEN ? AND ?
+      WHERE type IN ('expense', 'income') AND category != ? AND timestamp BETWEEN ? AND ?
       GROUP BY category
       ORDER BY total DESC`,
-    [from, to],
+    [INVESTMENT_CATEGORY, from, to],
   );
   const byCategory = (catRes.rows ?? []).map(row => ({
     category: String(row.category ?? ''),
@@ -453,17 +463,17 @@ export function getSummary(range: Range): Summary {
   const dayRes = conn.executeSync(
     `SELECT CAST((timestamp + ?) / 86400000 AS INTEGER) AS day, SUM(amount) AS total
        FROM transactions
-      WHERE type = 'expense' AND timestamp BETWEEN ? AND ?
+      WHERE type = 'expense' AND category != ? AND timestamp BETWEEN ? AND ?
       GROUP BY day
       ORDER BY day ASC`,
-    [tzOffsetMs, from, to],
+    [tzOffsetMs, INVESTMENT_CATEGORY, from, to],
   );
   const byDay = (dayRes.rows ?? []).map(row => ({
     day: Number(row.day ?? 0),
     total: Number(row.total ?? 0),
   }));
 
-  return { spent, received, net: received - spent, byCategory, byDay };
+  return { spent, received, net: received - spent, invested, byCategory, byDay };
 }
 
 export function getTopMerchants(

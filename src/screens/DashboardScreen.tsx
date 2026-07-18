@@ -268,6 +268,12 @@ export default function DashboardScreen() {
             />
           </View>
         </View>
+        {summary.invested > 0 && (
+          <Text style={styles.investedCaption}>
+            Invested: ₹{summary.invested.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+            {' '}(not counted as spend)
+          </Text>
+        )}
       </Card>
 
       {/* ── Spend trend ── */}
@@ -568,6 +574,12 @@ const styles = StyleSheet.create({
     margin: theme.spacing.lg,
     marginBottom: 0,
     padding: theme.spacing.lg,
+  },
+  investedCaption: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textMuted,
+    textAlign: 'center',
+    marginTop: theme.spacing.sm,
   },
   heroTitle: {
     fontSize: theme.font.size.sm,

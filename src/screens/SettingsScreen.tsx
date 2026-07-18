@@ -217,8 +217,10 @@ export default function SettingsScreen() {
     const overallNum = parseFloat(overallBudget);
     setBudget(OVERALL_BUDGET_KEY, isNaN(overallNum) ? 0 : overallNum);
 
-    // Per-category
-    for (const cat of CATEGORIES) {
+    // Per-category. Investment is excluded — its spend is deliberately not
+    // counted in getSummary().byCategory, so a budget against it could never
+    // register as spent.
+    for (const cat of CATEGORIES.filter(c => c !== 'Investment')) {
       const raw = categoryBudgets[cat] ?? '';
       const num = parseFloat(raw);
       setBudget(cat, isNaN(num) ? 0 : num);
@@ -372,7 +374,7 @@ export default function SettingsScreen() {
           placeholder="e.g. 30000"
         />
         <Text style={styles.subLabel}>Per-category budgets (₹, leave blank to remove)</Text>
-        {CATEGORIES.map(cat => (
+        {CATEGORIES.filter(cat => cat !== 'Investment').map(cat => (
           <InputRow
             key={cat}
             label={cat}

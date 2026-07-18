@@ -239,6 +239,12 @@ export default function InsightsScreen() {
             excluding {Array.from(excluded).join(', ')}
           </Text>
         )}
+        {summary.invested > 0 && (
+          <Text style={styles.investedCaption}>
+            Invested: ₹{summary.invested.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+            {' '}(not counted as spend)
+          </Text>
+        )}
       </Card>
 
       {/* ── Spend trend ── */}
@@ -405,6 +411,12 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing.sm,
     textAlign: 'center',
     fontStyle: 'italic',
+  },
+  investedCaption: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textMuted,
+    marginTop: theme.spacing.sm,
+    textAlign: 'center',
   },
   perDayCaption: {
     fontSize: theme.font.size.xs,
