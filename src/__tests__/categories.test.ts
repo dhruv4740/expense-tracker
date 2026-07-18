@@ -142,6 +142,39 @@ describe('categorize — keyword matching', () => {
   });
 });
 
+// ─── categorize: word-boundary matching (regression for substring false positives) ──
+
+describe('categorize — word-boundary matching', () => {
+  const noRules = undefined;
+
+  it('does not match "uber" inside "suburban"', () => {
+    const result = categorize(null, 'Rs.3000 debited from A/c XX1234 to suburban co-op society', null, noRules);
+    expect(result).not.toBe('Uber');
+  });
+
+  it('still matches a real Uber ride', () => {
+    expect(categorize('Uber', 'Rs.150 spent on Uber ride', null, noRules)).toBe('Uber');
+  });
+
+  it('does not match "emi" inside "premium"', () => {
+    const result = categorize(null, 'Rs.500 debited for premium membership renewal', null, noRules);
+    expect(result).not.toBe('Bills');
+  });
+
+  it('does not match "bus" inside "business"', () => {
+    const result = categorize(null, 'Rs.1000 debited for business services payment', null, noRules);
+    expect(result).not.toBe('Transport');
+  });
+
+  it('still matches a real EMI message', () => {
+    expect(categorize(null, 'Rs.2500 debited towards EMI payment', null, noRules)).toBe('Bills');
+  });
+
+  it('still matches "@" for UPI even though it has no word boundaries', () => {
+    expect(categorize(null, 'Rs.500 sent via UPI to user@oksbi', 'user@oksbi', noRules)).toBe('UPI');
+  });
+});
+
 // ─── categorize: learnedRules override ───────────────────────────────────────
 
 describe('categorize — learnedRules override', () => {

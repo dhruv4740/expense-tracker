@@ -111,9 +111,9 @@ const KEYWORD_MAP: Array<{ keywords: string[]; category: Category }> = [
   },
   {
     keywords: [
-      'electricity', 'recharge', 'bill', 'dth', 'broadband', 'insurance',
-      'emi', 'loan', 'postpaid', 'prepaid', 'utility', 'gas', 'water',
-      'maintenance', 'rent', 'subscription',
+      'electricity', 'recharge', 'bill', 'billdesk', 'dth', 'broadband',
+      'insurance', 'emi', 'loan', 'postpaid', 'prepaid', 'utility', 'gas',
+      'water', 'maintenance', 'rent', 'subscription',
     ],
     category: 'Bills',
   },
@@ -134,6 +134,42 @@ const KEYWORD_MAP: Array<{ keywords: string[]; category: Category }> = [
     category: 'Cash',
   },
 ];
+
+/**
+ * Escapes regex metacharacters in a literal keyword so it can be dropped into
+ * a larger pattern (e.g. "1mg" or "w/d" if they ever gain special chars).
+ */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * One compiled matcher per KEYWORD_MAP entry, built once at module load.
+ * Keywords are matched on word boundaries (`(?<![a-z0-9])kw(?![a-z0-9])`) so
+ * e.g. "uber" no longer matches inside "suburban" and "emi" no longer matches
+ * inside "premium" — a bare substring search (the previous behaviour) was
+ * the root cause of unrelated messages being tagged Uber. "@" can't take
+ * word boundaries (it's not a word character on either side), so it's
+ * special-cased to a plain substring check.
+ */
+const COMPILED_KEYWORD_MAP: Array<{ category: Category; test: (haystack: string) => boolean }> =
+  KEYWORD_MAP.map(({ keywords, category }) => {
+    const hasAt = keywords.includes('@');
+    const wordKeywords = keywords.filter(k => k !== '@');
+    const boundaryRe =
+      wordKeywords.length > 0
+        ? new RegExp(
+            `(?<![a-z0-9])(?:${wordKeywords.map(escapeRegExp).join('|')})(?![a-z0-9])`,
+            'i',
+          )
+        : null;
+    return {
+      category,
+      test: (haystack: string) =>
+        (boundaryRe !== null && boundaryRe.test(haystack)) ||
+        (hasAt && haystack.includes('@')),
+    };
+  });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -201,11 +237,9 @@ export function categorize(
   const haystack =
     `${merchant ?? ''} ${counterparty ?? ''} ${body}`.toLowerCase();
 
-  for (const { keywords, category } of KEYWORD_MAP) {
-    for (const kw of keywords) {
-      if (haystack.includes(kw)) {
-        return category;
-      }
+  for (const { category, test } of COMPILED_KEYWORD_MAP) {
+    if (test(haystack)) {
+      return category;
     }
   }
 
