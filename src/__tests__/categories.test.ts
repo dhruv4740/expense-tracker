@@ -13,8 +13,8 @@ describe('CATEGORIES', () => {
   it('includes all expected category values', () => {
     const expected: Category[] = [
       'Food', 'Groceries', 'Transport', 'Shopping', 'Bills',
-      'Entertainment', 'Health', 'UPI', 'Cash', 'Income',
-      'Friend Transfer', 'Loan/Dues', 'Other',
+      'Entertainment', 'Health', 'Investment', 'Education', 'UPI', 'Cash',
+      'Income', 'Friend Transfer', 'Loan/Dues', 'Other',
     ];
     for (const cat of expected) {
       expect(CATEGORIES).toContain(cat);
@@ -163,6 +163,28 @@ describe('categorize — keyword matching', () => {
 
   it('defaults to Other for unknown merchant', () => {
     expect(categorize('UnknownShop', 'Rs.100 debited at UnknownShop', null, noRules)).toBe('Other');
+  });
+
+  it('categorizes an ICCL mutual fund NACH debit → Investment', () => {
+    const body = 'Rs.3000.00 debited from A/c XX1234 to ICCL - Mutual Funds via NACH.';
+    expect(categorize(null, body, null, noRules)).toBe('Investment');
+  });
+
+  it('categorizes Zerodha/Groww SIP mentions → Investment', () => {
+    expect(categorize(null, 'Rs.5000 debited for SIP via Zerodha Coin', null, noRules)).toBe('Investment');
+  });
+
+  it('categorizes college/tuition fees → Education', () => {
+    expect(categorize(null, 'Rs.50000 debited towards college tuition fees', null, noRules)).toBe('Education');
+  });
+
+  it('categorizes Udemy course purchase → Education', () => {
+    expect(categorize('Udemy', 'Rs.499 debited for Udemy course', null, noRules)).toBe('Education');
+  });
+
+  it('does not miscategorize a bank annual fee as Education', () => {
+    const result = categorize(null, 'Rs.590 debited towards annual fee for your credit card', null, noRules);
+    expect(result).not.toBe('Education');
   });
 });
 

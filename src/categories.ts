@@ -9,6 +9,8 @@ export type Category =
   | 'Bills'
   | 'Entertainment'
   | 'Health'
+  | 'Investment'
+  | 'Education'
   | 'UPI'
   | 'Cash'
   | 'Income'
@@ -26,6 +28,8 @@ export const CATEGORIES: Category[] = [
   'Bills',
   'Entertainment',
   'Health',
+  'Investment',
+  'Education',
   'UPI',
   'Cash',
   'Income',
@@ -55,6 +59,8 @@ export const CATEGORY_META: Record<Category, CategoryMeta> = {
   Bills:         { color: '#FFB300', icon: 'receipt' },
   Entertainment: { color: '#F06292', icon: 'film' },
   Health:        { color: '#26C6DA', icon: 'medkit' },
+  Investment:    { color: '#FFD740', icon: 'stats' },
+  Education:     { color: '#CDDC39', icon: 'school' },
   UPI:           { color: '#7E57C2', icon: 'swap-horizontal' },
   Cash:          { color: '#A5D6A7', icon: 'cash' },
   Income:        { color: '#66BB6A', icon: 'trending-up' },
@@ -108,6 +114,25 @@ const KEYWORD_MAP: Array<{ keywords: string[]; category: Category }> = [
       'playstation', 'xbox',
     ],
     category: 'Entertainment',
+  },
+  {
+    // Checked before Bills/UPI (first match wins) so SIP/NACH mandate debits
+    // and demat-account SMS land here instead of Bills ("emi") or UPI ("@").
+    keywords: [
+      'mutual fund', 'iccl', 'sip', 'nach', 'zerodha', 'groww', 'upstox',
+      'kite', 'smallcase', 'demat', 'nse', 'bse', 'etf', 'folio', 'indmoney',
+      'mf',
+    ],
+    category: 'Investment',
+  },
+  {
+    // Checked before Bills ("fee"/"bill" would otherwise misfire on tuition
+    // fee / library fine notices).
+    keywords: [
+      'college', 'university', 'exam', 'fees', 'course', 'udemy', 'coursera',
+      'tuition', 'coaching', 'books', 'stationery', 'library',
+    ],
+    category: 'Education',
   },
   {
     keywords: [
