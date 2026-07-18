@@ -5,6 +5,7 @@ import {
   normalizeMerchantKey,
   CATEGORIES,
   CATEGORY_META,
+  GROUP_META,
   GROUPED_CATEGORIES,
   GROUPS,
   type Category,
@@ -98,6 +99,13 @@ describe('category groups', () => {
   it('Uber and Transport share the Transport group', () => {
     expect(groupOf('Uber')).toBe('Transport');
     expect(groupOf('Transport')).toBe('Transport');
+  });
+
+  it('has colour metadata for every group', () => {
+    for (const group of GROUPS) {
+      expect(GROUP_META[group]).toBeDefined();
+      expect(GROUP_META[group].color).toMatch(/^#[0-9a-fA-F]{6}$/);
+    }
   });
 });
 

@@ -122,6 +122,23 @@ export function groupOf(category: string): CategoryGroup {
   return (GROUP_OF as Record<string, CategoryGroup | undefined>)[category] ?? 'Other';
 }
 
+export interface GroupMeta {
+  /** Hex colour used for the group-level donut slice / legend dot. */
+  color: string;
+}
+
+/** Visual metadata for each group — used by the Insights group donut. */
+export const GROUP_META: Record<CategoryGroup, GroupMeta> = {
+  Essentials: { color: '#4CAF50' },
+  Transport: { color: '#29B6F6' },
+  Lifestyle: { color: '#CE93D8' },
+  Education: { color: '#CDDC39' },
+  Transfers: { color: '#7E57C2' },
+  Investments: { color: '#FFD740' },
+  Income: { color: '#66BB6A' },
+  Other: { color: '#78909C' },
+};
+
 /** CATEGORIES partitioned by group, in GROUPS order; each group's categories
  * keep CATEGORIES order. Groups with no categories are omitted. */
 export const GROUPED_CATEGORIES: Array<{ group: CategoryGroup; categories: Category[] }> =

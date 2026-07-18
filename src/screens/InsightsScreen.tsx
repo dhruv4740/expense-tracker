@@ -22,8 +22,8 @@ import {
   getRecurring,
 } from '../db';
 import type { Summary, RecurringEntry } from '../db';
-import { CATEGORY_META, CATEGORIES } from '../categories';
-import type { Category } from '../categories';
+import { CATEGORY_META, CATEGORIES, GROUP_META, GROUPS, groupOf } from '../categories';
+import type { Category, CategoryGroup } from '../categories';
 import { DATA_CHANGED } from '../sync';
 import {
   AmountText,
@@ -96,6 +96,11 @@ export default function InsightsScreen() {
 
   // View-only category exclude toggle (6d) — non-persistent, screen-local.
   const [excluded, setExcluded] = useState<Set<Category>>(new Set());
+
+  // Group donut drill-down: null shows all groups; set shows that group's
+  // categories. Reset whenever the range changes so a stale drill doesn't
+  // silently apply to different data.
+  const [drillGroup, setDrillGroup] = useState<CategoryGroup | null>(null);
   const toggleExcluded = useCallback((cat: Category) => {
     setExcluded(prev => {
       const next = new Set(prev);
@@ -127,6 +132,7 @@ export default function InsightsScreen() {
 
   function handleRangeChange(key: RangeKey) {
     setRangeKey(key);
+    setDrillGroup(null);
     reload(key);
   }
 
@@ -138,17 +144,50 @@ export default function InsightsScreen() {
     .reduce((sum, bc) => sum + bc.total, 0);
   const displayedSpent = summary.spent - excludedTotal;
 
-  // ── Donut data ──────────────────────────────────────────────────────────────
-  const donutData = summary.byCategory
-    .filter(bc => bc.total > 0 && !excluded.has(bc.category as Category))
-    .sort((a, b) => b.total - a.total)
-    .map(bc => ({
-      value: bc.total,
-      color: (CATEGORIES as string[]).includes(bc.category)
-        ? CATEGORY_META[bc.category as Category].color
-        : '#78909C',
-      label: bc.category,
-    }));
+  // ── Group totals (for the top-level group donut) ───────────────────────────
+  const groupTotals = new Map<CategoryGroup, number>();
+  for (const bc of summary.byCategory) {
+    if (bc.total <= 0) {
+      continue;
+    }
+    const g = groupOf(bc.category);
+    groupTotals.set(g, (groupTotals.get(g) ?? 0) + bc.total);
+  }
+  const groupData = GROUPS
+    .filter(g => (groupTotals.get(g) ?? 0) > 0)
+    .map(g => ({ group: g, total: groupTotals.get(g) as number }));
+
+  // ── Donut data — group level, or drilled into one group's categories ───────
+  const donutData = drillGroup == null
+    ? groupData.map(g => ({
+        value: g.total,
+        color: GROUP_META[g.group].color,
+        label: g.group,
+      }))
+    : summary.byCategory
+        .filter(
+          bc =>
+            bc.total > 0 &&
+            groupOf(bc.category) === drillGroup &&
+            !excluded.has(bc.category as Category),
+        )
+        .sort((a, b) => b.total - a.total)
+        .map(bc => ({
+          value: bc.total,
+          color: (CATEGORIES as string[]).includes(bc.category)
+            ? CATEGORY_META[bc.category as Category].color
+            : '#78909C',
+          label: bc.category,
+        }));
+
+  const donutCenterTotal = drillGroup == null
+    ? displayedSpent
+    : summary.byCategory
+        .filter(bc => groupOf(bc.category) === drillGroup && !excluded.has(bc.category as Category))
+        .reduce((sum, bc) => sum + bc.total, 0);
+  const donutCenterFormatted = donutCenterTotal.toLocaleString('en-IN', {
+    maximumFractionDigits: 0,
+  });
 
   // ── Trend data ──────────────────────────────────────────────────────────────
   const trendData = summary.byDay.map(bd => ({
@@ -161,11 +200,6 @@ export default function InsightsScreen() {
     { label: 'Debit', value: displayedSpent, color: theme.colors.debit },
     { label: 'Credit', value: summary.received, color: theme.colors.credit },
   ];
-
-  const totalSpentFormatted = displayedSpent.toLocaleString('en-IN', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  });
 
   // ── Per-day spend (6c) — "Last month" counts every day; the current month
   // counts only completed days. ─────────────────────────────────────────────
@@ -209,30 +243,65 @@ export default function InsightsScreen() {
       <Card style={styles.donutCard}>
         <Donut
           data={donutData}
-          centerValue={`₹${totalSpentFormatted}`}
-          centerLabel="spent"
+          centerValue={`₹${donutCenterFormatted}`}
+          centerLabel={drillGroup ?? 'spent'}
           size={180}
         />
-        {/* Tap a category to hide it from total/donut/per-day (6d) */}
-        {summary.byCategory.filter(bc => bc.total > 0).length > 0 && (
-          <View style={styles.legend}>
-            {summary.byCategory.filter(bc => bc.total > 0).map(bc => {
-              const isExcluded = excluded.has(bc.category as Category);
-              return (
+        {drillGroup != null && (
+          <TouchableOpacity
+            style={styles.backLink}
+            onPress={() => setDrillGroup(null)}
+            activeOpacity={0.6}
+          >
+            <Text style={styles.backLinkText}>‹ All groups</Text>
+          </TouchableOpacity>
+        )}
+        {drillGroup == null ? (
+          // Tap a group to drill into its categories.
+          groupData.length > 0 && (
+            <View style={styles.legend}>
+              {groupData.map(g => (
                 <TouchableOpacity
-                  key={bc.category}
-                  style={[styles.legendItem, isExcluded && styles.legendItemExcluded]}
-                  onPress={() => toggleExcluded(bc.category as Category)}
+                  key={g.group}
+                  style={styles.legendItem}
+                  onPress={() => setDrillGroup(g.group)}
                   activeOpacity={0.6}
                 >
-                  <CategoryChip category={bc.category} small />
-                  <Text style={[styles.legendAmt, isExcluded && styles.legendTextExcluded]}>
-                    ₹{bc.total.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                  <View style={styles.legendGroupLeft}>
+                    <View style={[styles.groupDot, { backgroundColor: GROUP_META[g.group].color }]} />
+                    <Text style={styles.legendGroupLabel}>{g.group}</Text>
+                  </View>
+                  <Text style={styles.legendAmt}>
+                    ₹{g.total.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                   </Text>
                 </TouchableOpacity>
-              );
-            })}
-          </View>
+              ))}
+            </View>
+          )
+        ) : (
+          // Tap a category to hide it from total/donut/per-day (6d).
+          summary.byCategory.filter(bc => bc.total > 0 && groupOf(bc.category) === drillGroup).length > 0 && (
+            <View style={styles.legend}>
+              {summary.byCategory
+                .filter(bc => bc.total > 0 && groupOf(bc.category) === drillGroup)
+                .map(bc => {
+                  const isExcluded = excluded.has(bc.category as Category);
+                  return (
+                    <TouchableOpacity
+                      key={bc.category}
+                      style={[styles.legendItem, isExcluded && styles.legendItemExcluded]}
+                      onPress={() => toggleExcluded(bc.category as Category)}
+                      activeOpacity={0.6}
+                    >
+                      <CategoryChip category={bc.category} small />
+                      <Text style={[styles.legendAmt, isExcluded && styles.legendTextExcluded]}>
+                        ₹{bc.total.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+            </View>
+          )
         )}
         {excluded.size > 0 && (
           <Text style={styles.excludingCaption}>
@@ -393,6 +462,28 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  legendGroupLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  groupDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  legendGroupLabel: {
+    fontSize: theme.font.size.sm,
+    color: theme.colors.textPrimary,
+  },
+  backLink: {
+    marginTop: theme.spacing.sm,
+  },
+  backLinkText: {
+    fontSize: theme.font.size.sm,
+    color: theme.colors.accent,
+    fontWeight: theme.font.weight.medium,
   },
   legendAmt: {
     fontSize: theme.font.size.sm,
