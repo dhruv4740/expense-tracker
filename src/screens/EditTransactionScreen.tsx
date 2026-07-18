@@ -195,7 +195,11 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
 
       updateTransaction(tx.id, changed);
 
-      if (categoryChanged) {
+      // A one-off category edit must NOT teach a rule — tagging a single UPI
+      // credit from a friend as Uber would otherwise silently recategorize
+      // everything from that person forever. Only "apply to all" opts into
+      // learning + backfilling matching rows.
+      if (categoryChanged && applyToAll) {
         const key = normalizeMerchantKey(merchantTrimmed, tx.counterparty ?? null);
         // A bare few-digit key (e.g. an account fragment) matches far too
         // broadly across unrelated transactions from the same bank to be
@@ -204,20 +208,17 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
           upsertMerchantRule(key, category);
           refreshSyncCaches();
 
-          // Optionally apply to all matching transactions
-          if (applyToAll) {
-            const matchingRows = queryTransactions({
-              search: merchantTrimmed ?? undefined,
-              includeSelf: true,
-            });
-            for (const row of matchingRows) {
-              if (
-                row.id != null &&
-                row.id !== tx.id &&
-                normalizeMerchantKey(row.merchant ?? null, row.counterparty ?? null) === key
-              ) {
-                updateTransaction(row.id, { category, category_source: 'manual' });
-              }
+          const matchingRows = queryTransactions({
+            search: merchantTrimmed ?? undefined,
+            includeSelf: true,
+          });
+          for (const row of matchingRows) {
+            if (
+              row.id != null &&
+              row.id !== tx.id &&
+              normalizeMerchantKey(row.merchant ?? null, row.counterparty ?? null) === key
+            ) {
+              updateTransaction(row.id, { category, category_source: 'manual' });
             }
           }
         }
@@ -444,7 +445,7 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
       {isEdit && (
         <View style={[styles.card, styles.toggleRow]}>
           <Text style={styles.toggleLabel}>
-            Apply this category to all from this merchant
+            Always use this category for this merchant
           </Text>
           <Switch
             value={applyToAll}
