@@ -14,12 +14,15 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
+import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RootStackParamList } from '../../App';
 
-import { insertManual, queryTransactions } from '../db';
+import { deleteTransaction, insertManual, queryTransactions } from '../db';
 import type { TransactionRow } from '../db';
 import { DATA_CHANGED } from '../sync';
-import { AmountText, Card, EmptyState, SectionHeader } from '../components';
+import { AmountText, Card, EmptyState, Icon, SectionHeader } from '../components';
 import { theme } from '../theme';
 import { formatDate } from '../dates';
 
@@ -36,6 +39,25 @@ function SplitFareCard() {
   const [splitCount, setSplitCount] = useState('');
   const [youPaid, setYouPaid] = useState('');
   const [youReceived, setYouReceived] = useState('');
+  const [timestamp, setTimestamp] = useState(() => Date.now());
+
+  const openDatePicker = useCallback(() => {
+    DateTimePickerAndroid.open({
+      value: new Date(timestamp),
+      mode: 'date',
+      maximumDate: new Date(),
+      onChange: (event, selected) => {
+        if (event.type !== 'set' || !selected) {
+          return;
+        }
+        setTimestamp(prev => {
+          const d = new Date(prev);
+          d.setFullYear(selected.getFullYear(), selected.getMonth(), selected.getDate());
+          return d.getTime();
+        });
+      },
+    });
+  }, [timestamp]);
 
   const { fairShare, net } = useMemo(() => {
     const total = parseFloat(totalFare) || 0;
@@ -53,6 +75,7 @@ function SplitFareCard() {
     setSplitCount('');
     setYouPaid('');
     setYouReceived('');
+    setTimestamp(Date.now());
   }, []);
 
   const onSave = useCallback(() => {
@@ -76,7 +99,7 @@ function SplitFareCard() {
       amount: net,
       merchant: 'Uber',
       category: 'Uber',
-      timestamp: Date.now(),
+      timestamp,
       type: 'expense',
       counterparty: null,
       account: null,
@@ -85,11 +108,17 @@ function SplitFareCard() {
     });
     DeviceEventEmitter.emit(DATA_CHANGED);
     reset();
-  }, [net, totalFare, splitCount, youPaid, youReceived, fairShare, reset]);
+  }, [net, totalFare, splitCount, youPaid, youReceived, fairShare, timestamp, reset]);
 
   return (
     <Card style={styles.splitCard}>
-      <Text style={styles.splitTitle}>Split a fare</Text>
+      <View style={styles.splitHeaderRow}>
+        <Text style={styles.splitTitle}>Split a fare</Text>
+        <TouchableOpacity style={styles.dateBtn} onPress={openDatePicker}>
+          <Icon name="calendar" size={14} color={theme.colors.accent} />
+          <Text style={styles.dateBtnText}>{formatDate(timestamp)}</Text>
+        </TouchableOpacity>
+      </View>
 
       <View style={styles.splitRow}>
         <View style={styles.splitField}>
@@ -158,6 +187,7 @@ function SplitFareCard() {
 }
 
 export default function UberScreen() {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const [rows, setRows] = useState<TransactionRow[]>(() => loadUberRows());
 
   const reload = useCallback(() => setRows(loadUberRows()), []);
@@ -167,6 +197,33 @@ export default function UberScreen() {
     const sub = DeviceEventEmitter.addListener(DATA_CHANGED, reload);
     return () => sub.remove();
   }, [reload]);
+
+  const handlePress = useCallback(
+    (item: TransactionRow) => {
+      navigation.navigate('EditTransaction', { tx: item });
+    },
+    [navigation],
+  );
+
+  const handleLongPress = useCallback(
+    (item: TransactionRow) => {
+      Alert.alert(item.merchant ?? 'Transaction', 'What would you like to do?', [
+        { text: 'Edit', onPress: () => navigation.navigate('EditTransaction', { tx: item }) },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            if (item.id != null) {
+              deleteTransaction(item.id);
+              DeviceEventEmitter.emit(DATA_CHANGED);
+            }
+          },
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ]);
+    },
+    [navigation],
+  );
 
   // Only actual debits count as "spent" — a stray refund/credit tagged Uber
   // (or a self-transfer) shouldn't inflate the total.
@@ -199,7 +256,12 @@ export default function UberScreen() {
           keyExtractor={r => String(r.id)}
           contentContainerStyle={styles.listContent}
           renderItem={({ item }) => (
-            <View style={styles.row}>
+            <TouchableOpacity
+              style={styles.row}
+              onPress={() => handlePress(item)}
+              onLongPress={() => handleLongPress(item)}
+              activeOpacity={0.7}
+            >
               <View style={styles.rowMain}>
                 <Text style={styles.merchant} numberOfLines={1}>
                   {item.merchant ?? item.counterparty ?? item.source ?? 'Uber'}
@@ -207,7 +269,7 @@ export default function UberScreen() {
                 <Text style={styles.date}>{formatDate(item.timestamp)}</Text>
               </View>
               <AmountText amount={item.amount} type={item.type} size={theme.font.size.md} />
-            </View>
+            </TouchableOpacity>
           )}
         />
       )}
@@ -267,11 +329,30 @@ const styles = StyleSheet.create({
     padding: theme.spacing.lg,
     gap: theme.spacing.sm,
   },
+  splitHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: theme.spacing.xs,
+  },
   splitTitle: {
     fontSize: theme.font.size.md,
     fontWeight: theme.font.weight.semibold,
     color: theme.colors.textPrimary,
-    marginBottom: theme.spacing.xs,
+  },
+  dateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 4,
+    borderRadius: theme.radius.sm,
+    backgroundColor: theme.colors.surfaceAlt,
+  },
+  dateBtnText: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.accent,
+    fontWeight: theme.font.weight.medium,
   },
   splitRow: {
     flexDirection: 'row',
