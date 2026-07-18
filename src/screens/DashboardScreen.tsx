@@ -37,6 +37,7 @@ import {
   AmountText,
   Card,
   Donut,
+  Icon,
   ProgressBar,
   SectionHeader,
   TrendChart,
@@ -57,6 +58,10 @@ interface DashboardData {
   balances: { account: string; balance: number; updatedAt: number }[];
   monthLabel: string;
   uncategorizedCount: number;
+  /** All-time total spent on Uber (not scoped to the current month like the
+   * rest of this screen) and how many rides that covers. */
+  uberTotal: number;
+  uberCount: number;
 }
 
 // ─── Data loader ──────────────────────────────────────────────────────────────
@@ -80,9 +85,26 @@ function loadData(): DashboardData {
   const balances = getAllAccountBalances();
   const uncategorizedCount = getUncategorizedCount();
 
+  // All-time (not month-scoped) so it doesn't disappear just because the
+  // current month has no Uber rides yet.
+  const uberRows = queryTransactions({ categories: ['Uber'], types: ['expense'] });
+  const uberTotal = uberRows.reduce((sum, r) => sum + r.amount, 0);
+  const uberCount = uberRows.length;
+
   const monthLabel = now.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
 
-  return { summary, prevSummary, topMerchant, biggestExpense, budgetStatus, balances, monthLabel, uncategorizedCount };
+  return {
+    summary,
+    prevSummary,
+    topMerchant,
+    biggestExpense,
+    budgetStatus,
+    balances,
+    monthLabel,
+    uncategorizedCount,
+    uberTotal,
+    uberCount,
+  };
 }
 
 // ─── Screen ──────────────────────────────────────────────────────────────────
@@ -136,7 +158,18 @@ export default function DashboardScreen() {
     return () => sub.remove();
   }, [reload]);
 
-  const { summary, prevSummary, topMerchant, biggestExpense, budgetStatus, balances, monthLabel, uncategorizedCount } = data;
+  const {
+    summary,
+    prevSummary,
+    topMerchant,
+    biggestExpense,
+    budgetStatus,
+    balances,
+    monthLabel,
+    uncategorizedCount,
+    uberTotal,
+    uberCount,
+  } = data;
 
   // ── Month-over-month deltas ────────────────────────────────────────────────
   // spentDelta is computed below displayedSpent (uses the excluded-categories
@@ -327,6 +360,29 @@ export default function DashboardScreen() {
           </Text>
         )}
       </Card>
+
+      {/* ── Uber (all-time, doesn't disappear if no rides this month) ── */}
+      {uberCount > 0 && (
+        <>
+          <SectionHeader title="Uber" />
+          <TouchableOpacity
+            style={styles.uberCard}
+            onPress={() => navigation.navigate('Uber')}
+            activeOpacity={0.8}
+          >
+            <View style={styles.uberLeft}>
+              <Icon name="car" size={28} color={CATEGORY_META.Uber.color} />
+              <View>
+                <Text style={styles.uberLabel}>
+                  Total spent on Uber ({uberCount} ride{uberCount !== 1 ? 's' : ''})
+                </Text>
+                <AmountText amount={uberTotal} type="expense" size={theme.font.size.lg} />
+              </View>
+            </View>
+            <Icon name="chevron-forward" size={18} color={theme.colors.textMuted} />
+          </TouchableOpacity>
+        </>
+      )}
 
       {/* ── Budget section ── */}
       {(budgetStatus.overall != null || budgetStatus.categories.length > 0) && (
@@ -625,6 +681,25 @@ const styles = StyleSheet.create({
   donutCard: {
     alignItems: 'center',
     paddingVertical: theme.spacing.lg,
+  },
+  uberCard: {
+    marginHorizontal: theme.spacing.lg,
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  uberLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+  },
+  uberLabel: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textSecondary,
+    marginBottom: 2,
   },
   legend: {
     width: '100%',
