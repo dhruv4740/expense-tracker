@@ -421,15 +421,13 @@ export function getSummary(range: Range): Summary {
 
   const totalsRes = conn.executeSync(
     `SELECT
-        COALESCE(SUM(CASE WHEN type = 'expense' AND category != ? THEN amount END), 0) AS spent,
         COALESCE(SUM(CASE WHEN type = 'income'  THEN amount END), 0) AS received,
         COALESCE(SUM(CASE WHEN type = 'expense' AND category = ?  THEN amount END), 0) AS invested
        FROM transactions
       WHERE timestamp BETWEEN ? AND ?`,
-    [INVESTMENT_CATEGORY, INVESTMENT_CATEGORY, from, to],
+    [INVESTMENT_CATEGORY, from, to],
   );
   const totRow = (totalsRes.rows ?? [])[0] ?? {};
-  const spent = Number(totRow.spent ?? 0);
   const received = Number(totRow.received ?? 0);
   const invested = Number(totRow.invested ?? 0);
 
@@ -453,6 +451,20 @@ export function getSummary(range: Range): Summary {
     category: String(row.category ?? ''),
     total: Number(row.total ?? 0),
   }));
+
+  // `spent` MUST be derived from the same netted-per-category totals as
+  // `byCategory` (summing only the positive nets — a category netted to <=0
+  // by an offsetting refund/credit is not "spend"). Computing it as a
+  // separate raw SUM(expense) here previously double-counted: a category
+  // with a same-month refund would net to <=0 and disappear from
+  // byCategory/the donut, while the raw expense side still counted toward
+  // `spent` — so the center total and the visible slices silently disagreed,
+  // and that category (e.g. Uber) looked like it vanished even though money
+  // was genuinely spent on it this period.
+  const spent = byCategory.reduce(
+    (sum, bc) => (bc.total > 0 ? sum + bc.total : sum),
+    0,
+  );
 
   // Bucket by LOCAL calendar day, not UTC day — otherwise anything between
   // local midnight and the UTC offset (00:00-05:30 on an IST device) lands in

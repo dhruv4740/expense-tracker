@@ -15,6 +15,7 @@ import {
   DeviceEventEmitter,
   Modal,
   RefreshControl,
+  ScrollView,
   SectionList,
   StyleSheet,
   Switch,
@@ -175,6 +176,7 @@ const FilterModal = React.memo(function FilterModal({
             </TouchableOpacity>
           </View>
 
+          <ScrollView style={fStyles.scrollBody} showsVerticalScrollIndicator={false}>
           <Text style={fStyles.sectionLabel}>DATE RANGE</Text>
           <View style={fStyles.chips}>
             {DATE_PRESETS.map(p => (
@@ -283,6 +285,7 @@ const FilterModal = React.memo(function FilterModal({
               onChangeText={v => setLocal(prev => ({ ...prev, amountMax: v }))}
             />
           </View>
+          </ScrollView>
 
           <View style={fStyles.actions}>
             <TouchableOpacity
@@ -620,12 +623,16 @@ const fStyles = StyleSheet.create({
     borderTopRightRadius: theme.radius.lg,
     padding: theme.spacing.lg,
     paddingBottom: 36,
+    maxHeight: '85%',
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: theme.spacing.lg,
+  },
+  scrollBody: {
+    flex: 1,
   },
   title: {
     fontSize: theme.font.size.lg,

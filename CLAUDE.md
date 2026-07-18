@@ -42,7 +42,7 @@ transactions(id, amount, merchant, source, raw_text, category, timestamp, type,
 - Soft cross-channel dedup (separate from dedup_key): drops an incoming row only when an existing row's channel is known and different from the incoming one — same-channel repeats are always kept
 - indices on timestamp, category, type; WAL mode
 - auxiliary tables: app_settings (key/value incl. per-account balances), merchant_rules (learned categorization), budgets
-categories: Food, Groceries, Transport, Uber, Shopping, Bills, Entertainment, Health, UPI, Cash, Income, Other (auto-assign by keyword, editable; Uber is its own category, checked before Transport)
+categories: Food, Groceries, Transport, Uber, Shopping, Bills, Entertainment, Health, Investment, Education, UPI, Cash, Income, Friend Transfer, Loan/Dues, Other (auto-assign by keyword, editable; Uber checked before Transport, Investment/Education checked before Bills/UPI). Grouped for display (Essentials/Transport/Lifestyle/Education/Transfers/Investments/Income/Other) via `groupOf()` in categories.ts — display-only, no DB column. Investment is excluded from spend totals (tracked separately as `invested`).
 
 ## Permissions needed
 - android.permission.RECEIVE_SMS
@@ -64,3 +64,7 @@ categories: Food, Groceries, Transport, Uber, Shopping, Bills, Entertainment, He
 - Release = `com.expensetracker`, fully standalone (no Metro needed).
 - The two packages are SEPARATE — installing debug does NOT touch the release app or its data.
 - Only command to push to the real phone: `cd android && ./gradlew assembleRelease` then `adb install -r .../app-release.apk`
+
+**Always build and install in the same session as the fix — don't leave a fix un-verified on-device.**
+- Once code changes for a task are complete (tests/typecheck/lint passing), ask the user to plug in the phone and confirm they're ready before building — don't assume the phone is connected.
+- Then run the assembleRelease + `adb install -r` sequence above. `-r` reinstalls over the existing app and preserves its data (SQLite DB, settings) — never uninstall first.
