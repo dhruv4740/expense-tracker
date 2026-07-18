@@ -1,5 +1,6 @@
 import {
   categorize,
+  isGenericMerchantKey,
   normalizeMerchantKey,
   CATEGORIES,
   CATEGORY_META,
@@ -57,6 +58,29 @@ describe('normalizeMerchantKey', () => {
 
   it('returns null when both are empty strings', () => {
     expect(normalizeMerchantKey('', '')).toBeNull();
+  });
+});
+
+// ─── isGenericMerchantKey ─────────────────────────────────────────────────────
+
+describe('isGenericMerchantKey', () => {
+  it('flags bare 1-5 digit keys as generic', () => {
+    expect(isGenericMerchantKey('1234')).toBe(true);
+    expect(isGenericMerchantKey('5678')).toBe(true);
+    expect(isGenericMerchantKey('9')).toBe(true);
+    expect(isGenericMerchantKey('12345')).toBe(true);
+  });
+
+  it('does not flag a 10-digit phone number', () => {
+    expect(isGenericMerchantKey('9876543210')).toBe(false);
+  });
+
+  it('does not flag a VPA', () => {
+    expect(isGenericMerchantKey('user123@ybl')).toBe(false);
+  });
+
+  it('does not flag a merchant name', () => {
+    expect(isGenericMerchantKey('swiggy')).toBe(false);
   });
 });
 
@@ -207,5 +231,13 @@ describe('categorize — learnedRules override', () => {
   it('empty learnedRules falls through to keyword map', () => {
     const rules: Record<string, string> = {};
     expect(categorize('Zomato', 'Rs.250 debited', null, rules)).toBe('Food');
+  });
+
+  it('ignores an already-poisoned generic numeric learned rule and falls through to keywords', () => {
+    // Simulates a rule keyed on the user's own account fragment (e.g. "1234")
+    // mapped to Uber from a past mis-edit — should never override categorization.
+    const rules: Record<string, string> = { '1234': 'Uber' };
+    const result = categorize(null, 'Rs.3000 debited from A/c XX1234 to ICCL - Mutual Funds', '1234', rules);
+    expect(result).not.toBe('Uber');
   });
 });

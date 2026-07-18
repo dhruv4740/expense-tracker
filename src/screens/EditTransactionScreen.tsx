@@ -34,7 +34,7 @@ import {
 import type { TransactionRow, TransactionType } from '../db';
 import { CATEGORIES } from '../categories';
 import type { Category } from '../categories';
-import { normalizeMerchantKey } from '../categories';
+import { isGenericMerchantKey, normalizeMerchantKey } from '../categories';
 import { DATA_CHANGED, refreshSyncCaches } from '../sync';
 import { CategoryChip, Icon, SectionHeader } from '../components';
 import { theme } from '../theme';
@@ -197,7 +197,10 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
 
       if (categoryChanged) {
         const key = normalizeMerchantKey(merchantTrimmed, tx.counterparty ?? null);
-        if (key != null) {
+        // A bare few-digit key (e.g. an account fragment) matches far too
+        // broadly across unrelated transactions from the same bank to be
+        // safe to learn as a rule.
+        if (key != null && !isGenericMerchantKey(key)) {
           upsertMerchantRule(key, category);
           refreshSyncCaches();
 

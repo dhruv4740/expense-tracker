@@ -189,6 +189,18 @@ export function normalizeMerchantKey(
   return raw.toLowerCase().replace(/\s+/g, ' ');
 }
 
+/**
+ * True for merchant-rule keys that are too generic to safely learn a rule
+ * from — a bare run of 1-5 digits. These come from account-fragment
+ * counterparties (e.g. "1234") which are shared across many unrelated SMS
+ * from the same bank, so a rule keyed on one silently mislabels everything
+ * else from that bank. 10-digit phone numbers and VPAs (which contain "@")
+ * are unaffected since they don't match this pattern.
+ */
+export function isGenericMerchantKey(key: string): boolean {
+  return /^\d{1,5}$/.test(key);
+}
+
 // ─── Main categorize function ─────────────────────────────────────────────────
 
 /**
@@ -218,7 +230,10 @@ export function categorize(
   // 1. Learned rules take highest priority.
   if (learnedRules) {
     const key = normalizeMerchantKey(merchant, counterparty);
-    if (key && Object.prototype.hasOwnProperty.call(learnedRules, key)) {
+    // Skip generic numeric keys (e.g. a bank account fragment) even if one
+    // is already sitting in the DB — such a rule matches far too broadly to
+    // trust, regardless of how it got there.
+    if (key && !isGenericMerchantKey(key) && Object.prototype.hasOwnProperty.call(learnedRules, key)) {
       const learned = learnedRules[key] as string;
       // Validate it is still a valid Category before trusting it.
       if ((CATEGORIES as string[]).includes(learned)) {

@@ -28,7 +28,7 @@ import type { TransactionRow } from '../db';
 import { CATEGORIES } from '../categories';
 import type { Category } from '../categories';
 import { CATEGORY_META } from '../categories';
-import { normalizeMerchantKey } from '../categories';
+import { isGenericMerchantKey, normalizeMerchantKey } from '../categories';
 import { DATA_CHANGED } from '../sync';
 import { AmountText, Card, EmptyState, SectionHeader } from '../components';
 import { theme } from '../theme';
@@ -78,7 +78,10 @@ export default function ReviewScreen() {
               tx.merchant ?? tx.counterparty ?? tx.source ?? '',
               tx.counterparty ?? '',
             );
-            if (!merchantKey) { return; }
+            // A bare few-digit key (e.g. an account fragment) matches far
+            // too broadly across unrelated transactions from the same bank
+            // to be safe to learn as a rule.
+            if (!merchantKey || isGenericMerchantKey(merchantKey)) { return; }
             upsertMerchantRule(merchantKey, cat);
             // Bulk update all past "Other" rows with same merchant/counterparty
             const toUpdate = queryTransactions({
