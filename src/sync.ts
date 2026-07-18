@@ -44,7 +44,8 @@ let learnedRulesCache: Record<string, string> = {};
  * Reload identity and learned merchant rules from the DB into module-level
  * caches. Call this after the user:
  *  - changes their identity (SettingsScreen)
- *  - edits a merchant category (MerchantRuleScreen)
+ *  - edits a merchant category (EditTransactionScreen, ReviewScreen)
+ *  - deletes or edits a learned rule (MerchantRulesScreen)
  */
 export function refreshSyncCaches(): void {
   identityCache = getIdentity();

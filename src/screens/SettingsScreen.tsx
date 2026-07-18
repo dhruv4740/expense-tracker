@@ -17,7 +17,9 @@ import {
   View,
   ActivityIndicator,
 } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RootStackParamList } from '../../App';
 
 import {
   getBudgets,
@@ -106,6 +108,8 @@ const inputStyles = StyleSheet.create({
 // ─── Screen ──────────────────────────────────────────────────────────────────
 
 export default function SettingsScreen() {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+
   // ── Profile ─────────────────────────────────────────────────────────────────
   const [name, setName] = useState('');
   const [phones, setPhones] = useState('');
@@ -522,6 +526,21 @@ export default function SettingsScreen() {
         </View>
       </Card>
 
+      {/* ── Categorization ── */}
+      <SectionHeader title="Categorization" />
+      <Card>
+        <TouchableOpacity
+          style={styles.dataBtn}
+          onPress={() => navigation.navigate('MerchantRules')}
+        >
+          <Icon name="list" size={18} color={theme.colors.accent} />
+          <Text style={[styles.dataBtnText, styles.dataBtnTextGrow]}>
+            Learned Merchant Rules
+          </Text>
+          <Icon name="chevron-forward" size={16} color={theme.colors.textMuted} />
+        </TouchableOpacity>
+      </Card>
+
       {/* ── Data ── */}
       <SectionHeader title="Data" />
       <Card>
@@ -771,6 +790,9 @@ const styles = StyleSheet.create({
   dataBtnText: {
     fontSize: theme.font.size.md,
     color: theme.colors.textPrimary,
+  },
+  dataBtnTextGrow: {
+    flex: 1,
   },
   aboutApp: {
     fontSize: theme.font.size.lg,
