@@ -3,11 +3,20 @@
 // Full list of every Uber-category transaction plus the all-time total spent.
 // Reached from the Dashboard's Uber card ("See all →").
 
-import React, { useCallback, useEffect, useState } from 'react';
-import { DeviceEventEmitter, FlatList, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Alert,
+  DeviceEventEmitter,
+  FlatList,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 
-import { queryTransactions } from '../db';
+import { insertManual, queryTransactions } from '../db';
 import type { TransactionRow } from '../db';
 import { DATA_CHANGED } from '../sync';
 import { AmountText, Card, EmptyState, SectionHeader } from '../components';
@@ -16,6 +25,136 @@ import { formatDate } from '../dates';
 
 function loadUberRows(): TransactionRow[] {
   return queryTransactions({ categories: ['Uber'] });
+}
+
+function fmt(n: number): string {
+  return n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function SplitFareCard() {
+  const [totalFare, setTotalFare] = useState('');
+  const [splitCount, setSplitCount] = useState('');
+  const [youPaid, setYouPaid] = useState('');
+  const [youReceived, setYouReceived] = useState('');
+
+  const { fairShare, net } = useMemo(() => {
+    const total = parseFloat(totalFare) || 0;
+    const n = parseInt(splitCount, 10) || 0;
+    const paid = parseFloat(youPaid) || 0;
+    const received = parseFloat(youReceived) || 0;
+    return {
+      fairShare: n > 0 ? total / n : 0,
+      net: paid - received,
+    };
+  }, [totalFare, splitCount, youPaid, youReceived]);
+
+  const reset = useCallback(() => {
+    setTotalFare('');
+    setSplitCount('');
+    setYouPaid('');
+    setYouReceived('');
+  }, []);
+
+  const onSave = useCallback(() => {
+    if (net <= 0) {
+      Alert.alert(
+        'Nothing to record',
+        "Your net share is ₹0 or less — you weren't actually out of pocket on this one.",
+      );
+      return;
+    }
+    const total = parseFloat(totalFare) || 0;
+    const n = parseInt(splitCount, 10) || 0;
+    const paid = parseFloat(youPaid) || 0;
+    const received = parseFloat(youReceived) || 0;
+    const note =
+      total > 0 && n > 0
+        ? `Split ₹${fmt(total)} ÷ ${n} (₹${fmt(fairShare)} each) · paid ₹${fmt(paid)} · received ₹${fmt(received)}`
+        : `Paid ₹${fmt(paid)} · received ₹${fmt(received)}`;
+
+    insertManual({
+      amount: net,
+      merchant: 'Uber',
+      category: 'Uber',
+      timestamp: Date.now(),
+      type: 'expense',
+      counterparty: null,
+      account: null,
+      note,
+      raw_text: null,
+    });
+    DeviceEventEmitter.emit(DATA_CHANGED);
+    reset();
+  }, [net, totalFare, splitCount, youPaid, youReceived, fairShare, reset]);
+
+  return (
+    <Card style={styles.splitCard}>
+      <Text style={styles.splitTitle}>Split a fare</Text>
+
+      <View style={styles.splitRow}>
+        <View style={styles.splitField}>
+          <Text style={styles.splitLabel}>Total fare (₹)</Text>
+          <TextInput
+            style={styles.splitInput}
+            value={totalFare}
+            onChangeText={setTotalFare}
+            keyboardType="decimal-pad"
+            placeholder="360"
+            placeholderTextColor={theme.colors.textMuted}
+          />
+        </View>
+        <View style={styles.splitField}>
+          <Text style={styles.splitLabel}>Split between</Text>
+          <TextInput
+            style={styles.splitInput}
+            value={splitCount}
+            onChangeText={setSplitCount}
+            keyboardType="number-pad"
+            placeholder="3"
+            placeholderTextColor={theme.colors.textMuted}
+          />
+        </View>
+      </View>
+
+      {fairShare > 0 && (
+        <Text style={styles.splitHint}>Fair share: ₹{fmt(fairShare)} each</Text>
+      )}
+
+      <View style={styles.splitRow}>
+        <View style={styles.splitField}>
+          <Text style={styles.splitLabel}>You paid (₹)</Text>
+          <TextInput
+            style={styles.splitInput}
+            value={youPaid}
+            onChangeText={setYouPaid}
+            keyboardType="decimal-pad"
+            placeholder="240"
+            placeholderTextColor={theme.colors.textMuted}
+          />
+        </View>
+        <View style={styles.splitField}>
+          <Text style={styles.splitLabel}>You got back (₹)</Text>
+          <TextInput
+            style={styles.splitInput}
+            value={youReceived}
+            onChangeText={setYouReceived}
+            keyboardType="decimal-pad"
+            placeholder="120"
+            placeholderTextColor={theme.colors.textMuted}
+          />
+        </View>
+      </View>
+
+      <View style={styles.splitFooter}>
+        <Text style={styles.splitNetLabel}>Your net share</Text>
+        <AmountText amount={Math.max(net, 0)} type="expense" size={theme.font.size.lg} />
+      </View>
+
+      <TouchableOpacity style={styles.splitSaveBtn} onPress={onSave} activeOpacity={0.8}>
+        <Text style={styles.splitSaveText}>Save as Uber expense</Text>
+      </TouchableOpacity>
+    </Card>
+  );
 }
 
 export default function UberScreen() {
@@ -44,6 +183,8 @@ export default function UberScreen() {
           {rows.length} transaction{rows.length !== 1 ? 's' : ''}
         </Text>
       </Card>
+
+      <SplitFareCard />
 
       <SectionHeader title="All Uber Transactions" />
       {rows.length === 0 ? (
@@ -119,5 +260,66 @@ const styles = StyleSheet.create({
   date: {
     fontSize: theme.font.size.xs,
     color: theme.colors.textMuted,
+  },
+  splitCard: {
+    margin: theme.spacing.lg,
+    marginBottom: 0,
+    padding: theme.spacing.lg,
+    gap: theme.spacing.sm,
+  },
+  splitTitle: {
+    fontSize: theme.font.size.md,
+    fontWeight: theme.font.weight.semibold,
+    color: theme.colors.textPrimary,
+    marginBottom: theme.spacing.xs,
+  },
+  splitRow: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+  },
+  splitField: {
+    flex: 1,
+    gap: 4,
+  },
+  splitLabel: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textSecondary,
+  },
+  splitInput: {
+    backgroundColor: theme.colors.surfaceAlt,
+    borderRadius: theme.radius.sm,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
+    fontSize: theme.font.size.md,
+    color: theme.colors.textPrimary,
+  },
+  splitHint: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textMuted,
+  },
+  splitFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: theme.spacing.xs,
+    paddingTop: theme.spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border,
+  },
+  splitNetLabel: {
+    fontSize: theme.font.size.sm,
+    color: theme.colors.textSecondary,
+  },
+  splitSaveBtn: {
+    backgroundColor: theme.colors.accent,
+    borderRadius: theme.radius.sm,
+    paddingVertical: theme.spacing.sm,
+    alignItems: 'center',
+    marginTop: theme.spacing.xs,
+  },
+  splitSaveText: {
+    fontSize: theme.font.size.md,
+    fontWeight: theme.font.weight.semibold,
+    color: theme.colors.bg,
   },
 });
