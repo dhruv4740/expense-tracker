@@ -537,6 +537,20 @@ export function getUberSummary(range: Range): UberSummary {
   return { spent, reimbursed, net: spent - reimbursed, rideCount, reimbursementCount, activeDays };
 }
 
+/**
+ * True if any transaction (any time, any type) is tagged with `category`.
+ * The Dashboard uses this to keep the Uber card — the only entry point to the
+ * Uber screen — visible in months with no rides yet.
+ */
+export function hasCategoryRows(category: string): boolean {
+  const conn = requireDb();
+  const res = conn.executeSync(
+    'SELECT 1 FROM transactions WHERE category = ? LIMIT 1',
+    [category],
+  );
+  return (res.rows ?? []).length > 0;
+}
+
 export function getTopMerchants(
   range: Range,
   limit = 5,

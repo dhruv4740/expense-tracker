@@ -25,6 +25,7 @@ import {
   getSummary,
   getUberSummary,
   getTopMerchants,
+  hasCategoryRows,
   queryTransactions,
   getAllAccountBalances,
   getUncategorizedCount,
@@ -62,6 +63,9 @@ interface DashboardData {
   /** This-month Uber spend net of reimbursements — same figure the Uber
    * screen shows, computed from the same shared query. */
   uberSummary: UberSummary;
+  /** Any Uber-tagged row ever — keeps the card (the only door to the Uber
+   * screen and its split calculator) visible in months with no rides yet. */
+  uberEverUsed: boolean;
 }
 
 // ─── Data loader ──────────────────────────────────────────────────────────────
@@ -86,6 +90,7 @@ function loadData(): DashboardData {
   const uncategorizedCount = getUncategorizedCount();
 
   const uberSummary = getUberSummary(range);
+  const uberEverUsed = hasCategoryRows('Uber');
 
   const monthLabel = now.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
 
@@ -99,6 +104,7 @@ function loadData(): DashboardData {
     monthLabel,
     uncategorizedCount,
     uberSummary,
+    uberEverUsed,
   };
 }
 
@@ -163,6 +169,7 @@ export default function DashboardScreen() {
     monthLabel,
     uncategorizedCount,
     uberSummary,
+    uberEverUsed,
   } = data;
 
   // ── Month-over-month deltas ────────────────────────────────────────────────
@@ -356,8 +363,11 @@ export default function DashboardScreen() {
         )}
       </Card>
 
-      {/* ── Uber (this month, net of reimbursements — same figure as the Uber screen) ── */}
-      {uberSummary.rideCount > 0 && (
+      {/* ── Uber (this month, net of reimbursements — same figure as the Uber screen).
+           Shown whenever Uber was ever used: this card is the only door to the
+           Uber screen, so hiding it in a ride-free month would lock the split
+           calculator away right when the month's first ride needs recording. ── */}
+      {uberEverUsed && (
         <>
           <SectionHeader title="Uber" />
           <TouchableOpacity
@@ -369,7 +379,9 @@ export default function DashboardScreen() {
               <Icon name="car" size={28} color={CATEGORY_META.Uber.color} />
               <View>
                 <Text style={styles.uberLabel}>
-                  Uber this month ({uberSummary.rideCount} ride{uberSummary.rideCount !== 1 ? 's' : ''})
+                  {uberSummary.rideCount > 0
+                    ? `Uber this month (${uberSummary.rideCount} ride${uberSummary.rideCount !== 1 ? 's' : ''})`
+                    : 'Uber this month — no rides yet'}
                 </Text>
                 <AmountText
                   amount={Math.abs(uberSummary.net)}
