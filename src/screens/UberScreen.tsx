@@ -177,6 +177,9 @@ function SplitFareCard() {
 
     // Double-count guard: if the full fare was already captured via SMS the
     // same day, saving the fair share on top of it would silently double it.
+    // Manual rows are skipped — a second split saved the same day is two
+    // separate rides, not a duplicate capture. (NULL channel = pre-migration
+    // history, which WAS captured, so it stays eligible.)
     const dayFrom = dayStart(new Date(timestamp)).getTime();
     const dayTo = dayFrom + 86_400_000 - 1;
     const candidates = queryTransactions({
@@ -184,7 +187,7 @@ function SplitFareCard() {
       types: ['expense'],
       from: dayFrom,
       to: dayTo,
-    }).filter(r => r.amount >= share - 0.005);
+    }).filter(r => r.channel !== 'manual' && r.amount >= share - 0.005);
 
     if (candidates.length === 0) {
       commit(share, note);
@@ -353,8 +356,11 @@ export default function UberScreen() {
   const avgPerDayMonth = summary.activeDays > 0 ? Math.max(summary.net, 0) / summary.activeDays : 0;
   const avgPerDayWeek = weekSummary.activeDays > 0 ? Math.max(weekSummary.net, 0) / weekSummary.activeDays : 0;
 
-  return (
-    <View style={styles.container}>
+  // The whole screen scrolls as one FlatList: with the split calculator and
+  // recent-credits sections stacked above the list, a fixed header would
+  // squeeze the transactions into a sliver on smaller screens.
+  const header = (
+    <>
       <Card style={styles.totalCard}>
         <Text style={styles.totalLabel}>Net Uber spend this month</Text>
         <AmountText
@@ -415,36 +421,41 @@ export default function UberScreen() {
       )}
 
       <SectionHeader title="This Month's Transactions" />
-      {rows.length === 0 ? (
+    </>
+  );
+
+  return (
+    <FlatList
+      style={styles.container}
+      data={rows}
+      keyExtractor={r => String(r.id)}
+      contentContainerStyle={styles.listContent}
+      keyboardShouldPersistTaps="handled"
+      ListHeaderComponent={header}
+      ListEmptyComponent={
         <EmptyState
           icon="car"
           title="No Uber transactions this month"
           subtitle="Uber rides will show up here once captured from SMS or notifications."
         />
-      ) : (
-        <FlatList
-          data={rows}
-          keyExtractor={r => String(r.id)}
-          contentContainerStyle={styles.listContent}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.row}
-              onPress={() => handlePress(item)}
-              onLongPress={() => handleLongPress(item)}
-              activeOpacity={0.7}
-            >
-              <View style={styles.rowMain}>
-                <Text style={styles.merchant} numberOfLines={1}>
-                  {item.merchant ?? item.counterparty ?? item.source ?? 'Uber'}
-                </Text>
-                <Text style={styles.date}>{formatDate(item.timestamp)}</Text>
-              </View>
-              <AmountText amount={item.amount} type={item.type} size={theme.font.size.md} />
-            </TouchableOpacity>
-          )}
-        />
+      }
+      renderItem={({ item }) => (
+        <TouchableOpacity
+          style={styles.row}
+          onPress={() => handlePress(item)}
+          onLongPress={() => handleLongPress(item)}
+          activeOpacity={0.7}
+        >
+          <View style={styles.rowMain}>
+            <Text style={styles.merchant} numberOfLines={1}>
+              {item.merchant ?? item.counterparty ?? item.source ?? 'Uber'}
+            </Text>
+            <Text style={styles.date}>{formatDate(item.timestamp)}</Text>
+          </View>
+          <AmountText amount={item.amount} type={item.type} size={theme.font.size.md} />
+        </TouchableOpacity>
       )}
-    </View>
+    />
   );
 }
 
@@ -486,13 +497,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   listContent: {
-    paddingHorizontal: theme.spacing.lg,
     paddingBottom: theme.spacing.xl,
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    marginHorizontal: theme.spacing.lg,
     paddingVertical: theme.spacing.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.colors.border,
