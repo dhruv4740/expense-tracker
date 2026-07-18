@@ -18,6 +18,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { enableScreens } from 'react-native-screens';
 
 import { initDb } from './src/db';
+import { runCleanupIfNeeded } from './src/maintenance';
 import { syncBuffer, subscribeLiveEvents } from './src/sync';
 import {
   isNotificationAccessGranted,
@@ -40,6 +41,7 @@ enableScreens();
 
 // ── DB init: call synchronously at module load so screens can query safely ──
 initDb();
+runCleanupIfNeeded();
 
 // ── Navigation types ─────────────────────────────────────────────────────────
 
@@ -136,6 +138,7 @@ export default function App() {
   // skipped in a test environment or module caching edge case.
   useEffect(() => {
     initDb();
+    runCleanupIfNeeded();
   }, []);
 
   // One-time permission setup: SMS is a runtime (dangerous) permission, and

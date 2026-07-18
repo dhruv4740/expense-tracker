@@ -521,6 +521,11 @@ export function upsertMerchantRule(key: string, category: string): void {
   );
 }
 
+export function deleteMerchantRule(key: string): void {
+  const conn = requireDb();
+  conn.executeSync('DELETE FROM merchant_rules WHERE key = ?', [key]);
+}
+
 // ─── budgets ──────────────────────────────────────────────────────────────────
 
 export function getBudgets(): Budget[] {
