@@ -1,7 +1,7 @@
 // ─── UberScreen ───────────────────────────────────────────────────────────────
 //
-// Full list of every Uber-category transaction plus the all-time total spent.
-// Reached from the Dashboard's Uber card ("See all →").
+// Current-month Uber transactions, plus average-per-day stats (this month and
+// this ISO week, Monday–Sunday). Reached from the Dashboard's Uber card.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -24,10 +24,40 @@ import type { TransactionRow } from '../db';
 import { DATA_CHANGED } from '../sync';
 import { AmountText, Card, EmptyState, Icon, SectionHeader } from '../components';
 import { theme } from '../theme';
-import { formatDate } from '../dates';
+import { formatDate, monthRange } from '../dates';
 
-function loadUberRows(): TransactionRow[] {
-  return queryTransactions({ categories: ['Uber'] });
+/** Local midnight for `d` (or now). */
+function dayStart(d: Date = new Date()): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+/** Monday 00:00 of the week containing `d` (getDay(): 0=Sun..6=Sat). */
+function weekStart(d: Date = new Date()): Date {
+  const start = dayStart(d);
+  const daysSinceMonday = (start.getDay() + 6) % 7;
+  start.setDate(start.getDate() - daysSinceMonday);
+  return start;
+}
+
+interface UberData {
+  monthRows: TransactionRow[];
+  weekSpent: number;
+}
+
+function loadUberData(): UberData {
+  const { from, to } = monthRange();
+  const monthRows = queryTransactions({ categories: ['Uber'], from, to });
+
+  // The current week can start in the previous calendar month (e.g. today is
+  // the 1st/2nd and Monday fell in the prior month) — query it independently
+  // of the month filter above rather than trying to derive it from monthRows.
+  const weekFrom = weekStart().getTime();
+  const weekRows = queryTransactions({ categories: ['Uber'], from: weekFrom, to: Date.now() });
+  const weekSpent = weekRows
+    .filter(r => r.type === 'expense')
+    .reduce((sum, r) => sum + r.amount, 0);
+
+  return { monthRows, weekSpent };
 }
 
 function fmt(n: number): string {
@@ -188,9 +218,10 @@ function SplitFareCard() {
 
 export default function UberScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const [rows, setRows] = useState<TransactionRow[]>(() => loadUberRows());
+  const [data, setData] = useState<UberData>(() => loadUberData());
+  const rows = data.monthRows;
 
-  const reload = useCallback(() => setRows(loadUberRows()), []);
+  const reload = useCallback(() => setData(loadUberData()), []);
   useFocusEffect(reload);
 
   useEffect(() => {
@@ -231,23 +262,44 @@ export default function UberScreen() {
     .filter(r => r.type === 'expense')
     .reduce((sum, r) => sum + r.amount, 0);
 
+  // Days elapsed so far in each period, INCLUDING today (a half-finished
+  // today still counts as a day that happened — dividing by the full period
+  // length instead would understate the average early in the month/week).
+  const today = new Date();
+  const daysElapsedInMonth = today.getDate();
+  const daysElapsedInWeek = (dayStart(today).getDay() + 6) % 7 + 1;
+
+  const avgPerDayMonth = daysElapsedInMonth > 0 ? total / daysElapsedInMonth : 0;
+  const avgPerDayWeek = daysElapsedInWeek > 0 ? data.weekSpent / daysElapsedInWeek : 0;
+
   return (
     <View style={styles.container}>
       <Card style={styles.totalCard}>
-        <Text style={styles.totalLabel}>Total spent on Uber</Text>
+        <Text style={styles.totalLabel}>Spent on Uber this month</Text>
         <AmountText amount={total} type="expense" size={theme.font.size.xl} />
         <Text style={styles.totalSub}>
           {rows.length} transaction{rows.length !== 1 ? 's' : ''}
         </Text>
       </Card>
 
+      <View style={styles.avgRow}>
+        <Card style={styles.avgCard}>
+          <Text style={styles.avgLabel}>Avg/day (this month)</Text>
+          <AmountText amount={avgPerDayMonth} type="expense" size={theme.font.size.md} />
+        </Card>
+        <Card style={styles.avgCard}>
+          <Text style={styles.avgLabel}>Avg/day (this week)</Text>
+          <AmountText amount={avgPerDayWeek} type="expense" size={theme.font.size.md} />
+        </Card>
+      </View>
+
       <SplitFareCard />
 
-      <SectionHeader title="All Uber Transactions" />
+      <SectionHeader title="This Month's Transactions" />
       {rows.length === 0 ? (
         <EmptyState
           icon="car"
-          title="No Uber transactions"
+          title="No Uber transactions this month"
           subtitle="Uber rides will show up here once captured from SMS or notifications."
         />
       ) : (
@@ -296,6 +348,23 @@ const styles = StyleSheet.create({
   totalSub: {
     fontSize: theme.font.size.xs,
     color: theme.colors.textMuted,
+  },
+  avgRow: {
+    flexDirection: 'row',
+    gap: theme.spacing.sm,
+    margin: theme.spacing.lg,
+    marginBottom: 0,
+  },
+  avgCard: {
+    flex: 1,
+    alignItems: 'center',
+    padding: theme.spacing.md,
+    gap: 4,
+  },
+  avgLabel: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textSecondary,
+    textAlign: 'center',
   },
   listContent: {
     paddingHorizontal: theme.spacing.lg,
