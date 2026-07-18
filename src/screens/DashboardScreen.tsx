@@ -44,7 +44,7 @@ import {
   TrendChart,
 } from '../components';
 import { theme } from '../theme';
-import { monthRange, prevMonthRange, localDayIndexToDate, completedDays } from '../dates';
+import { monthRange, prevMonthRange, localDayIndexToDate, completedDays, formatDayLabel } from '../dates';
 import { computeBudgetStatus } from '../budgets';
 import type { BudgetStatus } from '../budgets';
 
@@ -209,6 +209,7 @@ export default function DashboardScreen() {
   const trendData = summary.byDay.map(bd => ({
     value: bd.total,
     label: String(localDayIndexToDate(bd.day).getDate()),
+    date: formatDayLabel(localDayIndexToDate(bd.day).getTime()),
   }));
 
   // ── Over-budget check ───────────────────────────────────────────────────────

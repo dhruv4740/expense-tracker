@@ -42,6 +42,7 @@ import {
   last3MonthsRange,
   localDayIndexToDate,
   completedDays,
+  formatDayLabel,
 } from '../dates';
 import type { Range } from '../db';
 
@@ -193,6 +194,7 @@ export default function InsightsScreen() {
   const trendData = summary.byDay.map(bd => ({
     value: bd.total,
     label: String(localDayIndexToDate(bd.day).getDate()),
+    date: formatDayLabel(localDayIndexToDate(bd.day).getTime()),
   }));
 
   // ── Debit vs Credit bars ────────────────────────────────────────────────────

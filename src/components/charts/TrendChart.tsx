@@ -4,7 +4,7 @@
 // Shows EmptyState when there is no data or all values are zero.
 
 import React, { useMemo } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { LineChart } from 'react-native-gifted-charts';
 import { theme } from '../../theme';
 import EmptyState from '../EmptyState';
@@ -12,6 +12,8 @@ import EmptyState from '../EmptyState';
 export interface TrendPoint {
   value: number;
   label?: string;
+  /** Preformatted date shown in the tap tooltip, e.g. "12 Jul". Falls back to `label`. */
+  date?: string;
 }
 
 export interface TrendChartProps {
@@ -78,7 +80,28 @@ const TrendChart = React.memo(function TrendChart({
         noOfSections={4}
         hideYAxisText
         adjustToWidth
-        isAnimated
+        pointerConfig={{
+          pointerStripHeight: height,
+          pointerStripColor: theme.colors.border,
+          pointerStripWidth: 1,
+          pointerColor: color,
+          radius: 5,
+          activatePointersOnLongPress: false,
+          autoAdjustPointerLabelPosition: true,
+          pointerLabelWidth: 100,
+          pointerLabelHeight: 40,
+          pointerLabelComponent: (items: TrendPoint[]) => {
+            const point = items[0];
+            return (
+              <View style={styles.tooltip}>
+                <Text style={styles.tooltipDate}>{point?.date ?? point?.label ?? ''}</Text>
+                <Text style={styles.tooltipValue}>
+                  ₹{Math.round(point?.value ?? 0).toLocaleString('en-IN')}
+                </Text>
+              </View>
+            );
+          },
+        }}
       />
     </View>
   );
@@ -87,6 +110,24 @@ const TrendChart = React.memo(function TrendChart({
 const styles = StyleSheet.create({
   container: {
     overflow: 'hidden',
+  },
+  tooltip: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.sm,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    alignItems: 'center',
+  },
+  tooltipDate: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textMuted,
+  },
+  tooltipValue: {
+    fontSize: theme.font.size.sm,
+    fontWeight: theme.font.weight.bold,
+    color: theme.colors.textPrimary,
   },
 });
 
