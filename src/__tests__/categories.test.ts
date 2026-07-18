@@ -1,9 +1,12 @@
 import {
   categorize,
+  groupOf,
   isGenericMerchantKey,
   normalizeMerchantKey,
   CATEGORIES,
   CATEGORY_META,
+  GROUPED_CATEGORIES,
+  GROUPS,
   type Category,
 } from '../categories';
 
@@ -58,6 +61,43 @@ describe('normalizeMerchantKey', () => {
 
   it('returns null when both are empty strings', () => {
     expect(normalizeMerchantKey('', '')).toBeNull();
+  });
+});
+
+// ─── Category groups ──────────────────────────────────────────────────────────
+
+describe('category groups', () => {
+  it('every category appears in exactly one group via GROUPED_CATEGORIES', () => {
+    const seen = new Set<string>();
+    for (const { categories } of GROUPED_CATEGORIES) {
+      for (const cat of categories) {
+        expect(seen.has(cat)).toBe(false);
+        seen.add(cat);
+      }
+    }
+    expect(seen.size).toBe(CATEGORIES.length);
+    for (const cat of CATEGORIES) {
+      expect(seen.has(cat)).toBe(true);
+    }
+  });
+
+  it('groupOf resolves every real category to a group in GROUPS', () => {
+    for (const cat of CATEGORIES) {
+      expect(GROUPS).toContain(groupOf(cat));
+    }
+  });
+
+  it('groupOf defaults an unknown category string to Other', () => {
+    expect(groupOf('NotARealCategory')).toBe('Other');
+  });
+
+  it('Investment resolves to the Investments group', () => {
+    expect(groupOf('Investment')).toBe('Investments');
+  });
+
+  it('Uber and Transport share the Transport group', () => {
+    expect(groupOf('Uber')).toBe('Transport');
+    expect(groupOf('Transport')).toBe('Transport');
   });
 });
 

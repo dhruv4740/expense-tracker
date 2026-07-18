@@ -32,7 +32,7 @@ import {
   setAccountBalance,
 } from '../db';
 import type { TransactionRow, TransactionType } from '../db';
-import { CATEGORIES } from '../categories';
+import { GROUPED_CATEGORIES } from '../categories';
 import type { Category } from '../categories';
 import { isGenericMerchantKey, normalizeMerchantKey } from '../categories';
 import { DATA_CHANGED, refreshSyncCaches } from '../sync';
@@ -342,20 +342,25 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
 
       {/* Category */}
       <SectionHeader title="Category" />
-      <View style={[styles.card, styles.catCard]}>
-        {CATEGORIES.map(cat => (
-          <TouchableOpacity
-            key={cat}
-            onPress={() => setCategory(cat)}
-            style={[
-              styles.catChip,
-              category === cat ? styles.catChipActive : undefined,
-            ]}
-          >
-            <CategoryChip category={cat} small />
-          </TouchableOpacity>
-        ))}
-      </View>
+      {GROUPED_CATEGORIES.map(({ group, categories }) => (
+        <View key={group}>
+          <Text style={styles.groupLabel}>{group.toUpperCase()}</Text>
+          <View style={[styles.card, styles.catCard]}>
+            {categories.map(cat => (
+              <TouchableOpacity
+                key={cat}
+                onPress={() => setCategory(cat)}
+                style={[
+                  styles.catChip,
+                  category === cat ? styles.catChipActive : undefined,
+                ]}
+              >
+                <CategoryChip category={cat} small />
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      ))}
 
       {/* Merchant */}
       <SectionHeader title="Merchant" />
@@ -518,6 +523,15 @@ const styles = StyleSheet.create({
   },
   segmentTextActive: {
     color: theme.colors.accent,
+  },
+  groupLabel: {
+    fontSize: theme.font.size.xs,
+    fontWeight: theme.font.weight.semibold,
+    color: theme.colors.textMuted,
+    letterSpacing: 1.1,
+    marginTop: theme.spacing.sm,
+    marginBottom: theme.spacing.xs,
+    marginLeft: theme.spacing.md,
   },
   catCard: {
     flexDirection: 'row',

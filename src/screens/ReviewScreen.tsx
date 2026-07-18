@@ -25,7 +25,7 @@ import {
   upsertMerchantRule,
 } from '../db';
 import type { TransactionRow } from '../db';
-import { CATEGORIES } from '../categories';
+import { GROUPED_CATEGORIES } from '../categories';
 import type { Category } from '../categories';
 import { CATEGORY_META } from '../categories';
 import { isGenericMerchantKey, normalizeMerchantKey } from '../categories';
@@ -149,16 +149,21 @@ export default function ReviewScreen() {
               </Text>
             )}
             <ScrollView style={styles.catList} showsVerticalScrollIndicator={false}>
-              {(CATEGORIES as Category[]).map(cat => (
-                <TouchableOpacity
-                  key={cat}
-                  style={styles.catRow}
-                  onPress={() => handlePickCategory(cat)}
-                  activeOpacity={0.7}
-                >
-                  <View style={[styles.catDot, { backgroundColor: CATEGORY_META[cat].color }]} />
-                  <Text style={styles.catLabel}>{cat}</Text>
-                </TouchableOpacity>
+              {GROUPED_CATEGORIES.map(({ group, categories }) => (
+                <View key={group}>
+                  <Text style={styles.groupLabel}>{group.toUpperCase()}</Text>
+                  {categories.map(cat => (
+                    <TouchableOpacity
+                      key={cat}
+                      style={styles.catRow}
+                      onPress={() => handlePickCategory(cat)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={[styles.catDot, { backgroundColor: CATEGORY_META[cat].color }]} />
+                      <Text style={styles.catLabel}>{cat}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
               ))}
             </ScrollView>
             <TouchableOpacity style={styles.cancelBtn} onPress={() => setSelected(null)}>
@@ -233,6 +238,14 @@ const styles = StyleSheet.create({
   },
   catList: {
     maxHeight: 400,
+  },
+  groupLabel: {
+    fontSize: theme.font.size.xs,
+    fontWeight: theme.font.weight.semibold,
+    color: theme.colors.textMuted,
+    letterSpacing: 1.1,
+    marginTop: theme.spacing.md,
+    marginBottom: theme.spacing.xs,
   },
   catRow: {
     flexDirection: 'row',

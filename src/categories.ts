@@ -69,6 +69,67 @@ export const CATEGORY_META: Record<Category, CategoryMeta> = {
   Other:         { color: '#78909C', icon: 'ellipsis-horizontal' },
 };
 
+// ─── Category groups ──────────────────────────────────────────────────────────
+//
+// Purely a display-organization layer — no DB column, derived from Category.
+// Used to group category pickers/filters and to roll up the Insights donut.
+
+export type CategoryGroup =
+  | 'Essentials'
+  | 'Transport'
+  | 'Lifestyle'
+  | 'Education'
+  | 'Transfers'
+  | 'Investments'
+  | 'Income'
+  | 'Other';
+
+/** Ordered list of all groups (used for section headers, drill-down lists). */
+export const GROUPS: CategoryGroup[] = [
+  'Essentials',
+  'Transport',
+  'Lifestyle',
+  'Education',
+  'Transfers',
+  'Investments',
+  'Income',
+  'Other',
+];
+
+/** Which group each category belongs to. Record<Category, ...> forces this
+ * to be updated whenever a new Category is added. */
+export const GROUP_OF: Record<Category, CategoryGroup> = {
+  Food: 'Essentials',
+  Groceries: 'Essentials',
+  Bills: 'Essentials',
+  Health: 'Essentials',
+  Transport: 'Transport',
+  Uber: 'Transport',
+  Shopping: 'Lifestyle',
+  Entertainment: 'Lifestyle',
+  Education: 'Education',
+  Investment: 'Investments',
+  UPI: 'Transfers',
+  Cash: 'Transfers',
+  'Friend Transfer': 'Transfers',
+  'Loan/Dues': 'Transfers',
+  Income: 'Income',
+  Other: 'Other',
+};
+
+/** Returns the group for a category string, defaulting unknown values to 'Other'. */
+export function groupOf(category: string): CategoryGroup {
+  return (GROUP_OF as Record<string, CategoryGroup | undefined>)[category] ?? 'Other';
+}
+
+/** CATEGORIES partitioned by group, in GROUPS order; each group's categories
+ * keep CATEGORIES order. Groups with no categories are omitted. */
+export const GROUPED_CATEGORIES: Array<{ group: CategoryGroup; categories: Category[] }> =
+  GROUPS.map(group => ({
+    group,
+    categories: CATEGORIES.filter(cat => GROUP_OF[cat] === group),
+  })).filter(g => g.categories.length > 0);
+
 // ─── Keyword map ──────────────────────────────────────────────────────────────
 
 const KEYWORD_MAP: Array<{ keywords: string[]; category: Category }> = [

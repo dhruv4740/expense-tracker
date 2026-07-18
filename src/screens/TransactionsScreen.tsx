@@ -33,7 +33,7 @@ import {
   queryTransactions,
 } from '../db';
 import type { TransactionRow, TransactionType, TransactionFilters } from '../db';
-import { CATEGORIES } from '../categories';
+import { GROUPED_CATEGORIES } from '../categories';
 import { DATA_CHANGED } from '../sync';
 import {
   AmountText,
@@ -199,29 +199,34 @@ const FilterModal = React.memo(function FilterModal({
           </View>
 
           <Text style={fStyles.sectionLabel}>CATEGORIES</Text>
-          <View style={fStyles.chips}>
-            {CATEGORIES.map(cat => (
-              <TouchableOpacity
-                key={cat}
-                style={[
-                  fStyles.chip,
-                  local.selectedCategories.includes(cat) ? fStyles.chipActive : undefined,
-                ]}
-                onPress={() => toggleCategory(cat)}
-              >
-                <Text
-                  style={[
-                    fStyles.chipText,
-                    local.selectedCategories.includes(cat)
-                      ? fStyles.chipTextActive
-                      : undefined,
-                  ]}
-                >
-                  {cat}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+          {GROUPED_CATEGORIES.map(({ group, categories }) => (
+            <View key={group}>
+              <Text style={fStyles.groupLabel}>{group}</Text>
+              <View style={fStyles.chips}>
+                {categories.map(cat => (
+                  <TouchableOpacity
+                    key={cat}
+                    style={[
+                      fStyles.chip,
+                      local.selectedCategories.includes(cat) ? fStyles.chipActive : undefined,
+                    ]}
+                    onPress={() => toggleCategory(cat)}
+                  >
+                    <Text
+                      style={[
+                        fStyles.chipText,
+                        local.selectedCategories.includes(cat)
+                          ? fStyles.chipTextActive
+                          : undefined,
+                      ]}
+                    >
+                      {cat}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          ))}
 
           <Text style={fStyles.sectionLabel}>TYPE</Text>
           <View style={fStyles.chips}>
@@ -634,6 +639,12 @@ const fStyles = StyleSheet.create({
     letterSpacing: 1.1,
     marginTop: theme.spacing.md,
     marginBottom: theme.spacing.sm,
+  },
+  groupLabel: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textMuted,
+    marginTop: theme.spacing.sm,
+    marginBottom: theme.spacing.xs,
   },
   chips: {
     flexDirection: 'row',
