@@ -45,10 +45,14 @@ function weekStart(d: Date = new Date()): Date {
   return start;
 }
 
+const RECENT_CREDITS_DAYS = 14;
+const RECENT_CREDITS_LIMIT = 5;
+
 interface UberData {
   monthRows: TransactionRow[];
   summary: UberSummary;
   weekSummary: UberSummary;
+  recentCredits: TransactionRow[];
 }
 
 function loadUberData(): UberData {
@@ -62,7 +66,14 @@ function loadUberData(): UberData {
   const weekFrom = weekStart().getTime();
   const weekSummary = getUberSummary({ from: weekFrom, to: Date.now() });
 
-  return { monthRows, summary, weekSummary };
+  // Recent incoming payments not already tagged Uber — lets you tag a
+  // friend's pay-back in one tap instead of hunting for it in Transactions.
+  const creditsFrom = Date.now() - RECENT_CREDITS_DAYS * 86_400_000;
+  const recentCredits = queryTransactions({ types: ['income'], from: creditsFrom, to: Date.now() })
+    .filter(r => r.category !== 'Uber')
+    .slice(0, RECENT_CREDITS_LIMIT);
+
+  return { monthRows, summary, weekSummary, recentCredits };
 }
 
 function fmt(n: number): string {
@@ -326,7 +337,15 @@ export default function UberScreen() {
     [navigation],
   );
 
-  const { summary, weekSummary } = data;
+  const markUber = useCallback((item: TransactionRow) => {
+    if (item.id == null) {
+      return;
+    }
+    updateTransaction(item.id, { category: 'Uber', category_source: 'manual' });
+    DeviceEventEmitter.emit(DATA_CHANGED);
+  }, []);
+
+  const { summary, weekSummary, recentCredits } = data;
 
   // Average per day you actually rode, not per calendar day — riding 15 of
   // 20 elapsed days divides by 15, so a light month doesn't look misleadingly
@@ -368,6 +387,32 @@ export default function UberScreen() {
       </View>
 
       <SplitFareCard />
+
+      {recentCredits.length > 0 && (
+        <>
+          <SectionHeader title="Recent Credits" />
+          <Card style={styles.creditsCard}>
+            {recentCredits.map(item => (
+              <View key={item.id} style={styles.creditRow}>
+                <View style={styles.creditMain}>
+                  <Text style={styles.merchant} numberOfLines={1}>
+                    {item.counterparty ?? item.merchant ?? item.source ?? 'Unknown'}
+                  </Text>
+                  <Text style={styles.date}>{formatDate(item.timestamp)}</Text>
+                </View>
+                <AmountText amount={item.amount} type="income" size={theme.font.size.sm} />
+                <TouchableOpacity
+                  style={styles.markUberBtn}
+                  onPress={() => markUber(item)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.markUberText}>Mark Uber</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+          </Card>
+        </>
+      )}
 
       <SectionHeader title="This Month's Transactions" />
       {rows.length === 0 ? (
@@ -465,6 +510,31 @@ const styles = StyleSheet.create({
   date: {
     fontSize: theme.font.size.xs,
     color: theme.colors.textMuted,
+  },
+  creditsCard: {
+    marginHorizontal: theme.spacing.lg,
+    padding: theme.spacing.md,
+    gap: theme.spacing.sm,
+  },
+  creditRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  creditMain: {
+    flex: 1,
+    gap: 2,
+  },
+  markUberBtn: {
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: 6,
+    borderRadius: theme.radius.sm,
+    backgroundColor: theme.colors.accent + '22',
+  },
+  markUberText: {
+    fontSize: theme.font.size.xs,
+    fontWeight: theme.font.weight.semibold,
+    color: theme.colors.accent,
   },
   splitCard: {
     margin: theme.spacing.lg,
