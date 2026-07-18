@@ -632,7 +632,7 @@ const fStyles = StyleSheet.create({
     marginBottom: theme.spacing.lg,
   },
   scrollBody: {
-    flex: 1,
+    flexShrink: 1,
   },
   title: {
     fontSize: theme.font.size.lg,
