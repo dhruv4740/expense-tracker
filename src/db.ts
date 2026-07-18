@@ -43,6 +43,17 @@ export interface Summary {
   byDay: { day: number; total: number }[];
 }
 
+export interface UberSummary {
+  spent: number;
+  reimbursed: number;
+  /** spent - reimbursed. Can go negative if reimbursements exceed spend. */
+  net: number;
+  rideCount: number;
+  reimbursementCount: number;
+  /** Distinct local calendar days with at least one Uber expense in range. */
+  activeDays: number;
+}
+
 /** Category excluded from spend totals/charts (tracked separately as `invested`). */
 const INVESTMENT_CATEGORY = 'Investment';
 
@@ -486,6 +497,44 @@ export function getSummary(range: Range): Summary {
   }));
 
   return { spent, received, net: received - spent, invested, byCategory, byDay };
+}
+
+/**
+ * Net Uber cost for a range: spend minus reimbursements, both tagged
+ * category='Uber' regardless of who paid whom. This is the single source of
+ * truth the Dashboard card and Uber screen both read from, so they can never
+ * disagree the way an all-time raw sum and a this-month raw sum used to.
+ */
+export function getUberSummary(range: Range): UberSummary {
+  const conn = requireDb();
+  const { from, to } = range;
+
+  const totalsRes = conn.executeSync(
+    `SELECT
+        COALESCE(SUM(CASE WHEN type = 'expense' THEN amount END), 0) AS spent,
+        COALESCE(SUM(CASE WHEN type = 'income'  THEN amount END), 0) AS reimbursed,
+        COALESCE(SUM(CASE WHEN type = 'expense' THEN 1 END), 0) AS rideCount,
+        COALESCE(SUM(CASE WHEN type = 'income'  THEN 1 END), 0) AS reimbursementCount
+       FROM transactions
+      WHERE category = 'Uber' AND type IN ('expense', 'income') AND timestamp BETWEEN ? AND ?`,
+    [from, to],
+  );
+  const totRow = (totalsRes.rows ?? [])[0] ?? {};
+  const spent = Number(totRow.spent ?? 0);
+  const reimbursed = Number(totRow.reimbursed ?? 0);
+  const rideCount = Number(totRow.rideCount ?? 0);
+  const reimbursementCount = Number(totRow.reimbursementCount ?? 0);
+
+  const tzOffsetMs = localTzOffsetMs();
+  const activeDaysRes = conn.executeSync(
+    `SELECT COUNT(DISTINCT CAST((timestamp + ?) / 86400000 AS INTEGER)) AS activeDays
+       FROM transactions
+      WHERE category = 'Uber' AND type = 'expense' AND timestamp BETWEEN ? AND ?`,
+    [tzOffsetMs, from, to],
+  );
+  const activeDays = Number((activeDaysRes.rows ?? [])[0]?.activeDays ?? 0);
+
+  return { spent, reimbursed, net: spent - reimbursed, rideCount, reimbursementCount, activeDays };
 }
 
 export function getTopMerchants(

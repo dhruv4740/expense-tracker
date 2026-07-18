@@ -19,8 +19,8 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../App';
 
-import { deleteTransaction, insertManual, queryTransactions } from '../db';
-import type { TransactionRow } from '../db';
+import { deleteTransaction, getUberSummary, insertManual, queryTransactions } from '../db';
+import type { TransactionRow, UberSummary } from '../db';
 import { DATA_CHANGED } from '../sync';
 import { AmountText, Card, EmptyState, Icon, SectionHeader } from '../components';
 import { theme } from '../theme';
@@ -41,23 +41,22 @@ function weekStart(d: Date = new Date()): Date {
 
 interface UberData {
   monthRows: TransactionRow[];
-  weekSpent: number;
+  summary: UberSummary;
+  weekSummary: UberSummary;
 }
 
 function loadUberData(): UberData {
   const { from, to } = monthRange();
   const monthRows = queryTransactions({ categories: ['Uber'], from, to });
+  const summary = getUberSummary({ from, to });
 
   // The current week can start in the previous calendar month (e.g. today is
   // the 1st/2nd and Monday fell in the prior month) — query it independently
   // of the month filter above rather than trying to derive it from monthRows.
   const weekFrom = weekStart().getTime();
-  const weekRows = queryTransactions({ categories: ['Uber'], from: weekFrom, to: Date.now() });
-  const weekSpent = weekRows
-    .filter(r => r.type === 'expense')
-    .reduce((sum, r) => sum + r.amount, 0);
+  const weekSummary = getUberSummary({ from: weekFrom, to: Date.now() });
 
-  return { monthRows, weekSpent };
+  return { monthRows, summary, weekSummary };
 }
 
 function fmt(n: number): string {
@@ -256,39 +255,43 @@ export default function UberScreen() {
     [navigation],
   );
 
-  // Only actual debits count as "spent" — a stray refund/credit tagged Uber
-  // (or a self-transfer) shouldn't inflate the total.
-  const total = rows
-    .filter(r => r.type === 'expense')
-    .reduce((sum, r) => sum + r.amount, 0);
+  const { summary, weekSummary } = data;
 
-  // Days elapsed so far in each period, INCLUDING today (a half-finished
-  // today still counts as a day that happened — dividing by the full period
-  // length instead would understate the average early in the month/week).
-  const today = new Date();
-  const daysElapsedInMonth = today.getDate();
-  const daysElapsedInWeek = (dayStart(today).getDay() + 6) % 7 + 1;
-
-  const avgPerDayMonth = daysElapsedInMonth > 0 ? total / daysElapsedInMonth : 0;
-  const avgPerDayWeek = daysElapsedInWeek > 0 ? data.weekSpent / daysElapsedInWeek : 0;
+  // Average per day you actually rode, not per calendar day — riding 15 of
+  // 20 elapsed days divides by 15, so a light month doesn't look misleadingly
+  // cheap-per-day just because you didn't take Uber every day.
+  const avgPerDayMonth = summary.activeDays > 0 ? Math.max(summary.net, 0) / summary.activeDays : 0;
+  const avgPerDayWeek = weekSummary.activeDays > 0 ? Math.max(weekSummary.net, 0) / weekSummary.activeDays : 0;
 
   return (
     <View style={styles.container}>
       <Card style={styles.totalCard}>
-        <Text style={styles.totalLabel}>Spent on Uber this month</Text>
-        <AmountText amount={total} type="expense" size={theme.font.size.xl} />
+        <Text style={styles.totalLabel}>Net Uber spend this month</Text>
+        <AmountText
+          amount={Math.abs(summary.net)}
+          type={summary.net >= 0 ? 'expense' : 'income'}
+          size={theme.font.size.xl}
+        />
         <Text style={styles.totalSub}>
-          {rows.length} transaction{rows.length !== 1 ? 's' : ''}
+          {summary.rideCount} ride{summary.rideCount !== 1 ? 's' : ''}
+          {summary.reimbursementCount > 0
+            ? ` · ${summary.reimbursementCount} reimbursement${summary.reimbursementCount !== 1 ? 's' : ''}`
+            : ''}
         </Text>
+        {summary.reimbursed > 0 && (
+          <Text style={styles.totalSub}>
+            ₹{fmt(summary.spent)} spent · ₹{fmt(summary.reimbursed)} reimbursed
+          </Text>
+        )}
       </Card>
 
       <View style={styles.avgRow}>
         <Card style={styles.avgCard}>
-          <Text style={styles.avgLabel}>Avg/day (this month)</Text>
+          <Text style={styles.avgLabel}>Avg per ride day (month)</Text>
           <AmountText amount={avgPerDayMonth} type="expense" size={theme.font.size.md} />
         </Card>
         <Card style={styles.avgCard}>
-          <Text style={styles.avgLabel}>Avg/day (this week)</Text>
+          <Text style={styles.avgLabel}>Avg per ride day (week)</Text>
           <AmountText amount={avgPerDayWeek} type="expense" size={theme.font.size.md} />
         </Card>
       </View>

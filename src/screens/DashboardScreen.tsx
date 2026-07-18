@@ -23,13 +23,14 @@ import type { RootStackParamList } from '../../App';
 import { isNotificationAccessGranted, openNotificationAccessSettings } from '../native/NotificationModule';
 import {
   getSummary,
+  getUberSummary,
   getTopMerchants,
   queryTransactions,
   getAllAccountBalances,
   getUncategorizedCount,
   setAccountBalance,
 } from '../db';
-import type { Summary, TransactionRow } from '../db';
+import type { Summary, TransactionRow, UberSummary } from '../db';
 import { CATEGORY_META, CATEGORIES } from '../categories';
 import type { Category } from '../categories';
 import { DATA_CHANGED } from '../sync';
@@ -58,10 +59,9 @@ interface DashboardData {
   balances: { account: string; balance: number; updatedAt: number }[];
   monthLabel: string;
   uncategorizedCount: number;
-  /** All-time total spent on Uber (not scoped to the current month like the
-   * rest of this screen) and how many rides that covers. */
-  uberTotal: number;
-  uberCount: number;
+  /** This-month Uber spend net of reimbursements — same figure the Uber
+   * screen shows, computed from the same shared query. */
+  uberSummary: UberSummary;
 }
 
 // ─── Data loader ──────────────────────────────────────────────────────────────
@@ -85,11 +85,7 @@ function loadData(): DashboardData {
   const balances = getAllAccountBalances();
   const uncategorizedCount = getUncategorizedCount();
 
-  // All-time (not month-scoped) so it doesn't disappear just because the
-  // current month has no Uber rides yet.
-  const uberRows = queryTransactions({ categories: ['Uber'], types: ['expense'] });
-  const uberTotal = uberRows.reduce((sum, r) => sum + r.amount, 0);
-  const uberCount = uberRows.length;
+  const uberSummary = getUberSummary(range);
 
   const monthLabel = now.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
 
@@ -102,8 +98,7 @@ function loadData(): DashboardData {
     balances,
     monthLabel,
     uncategorizedCount,
-    uberTotal,
-    uberCount,
+    uberSummary,
   };
 }
 
@@ -167,8 +162,7 @@ export default function DashboardScreen() {
     balances,
     monthLabel,
     uncategorizedCount,
-    uberTotal,
-    uberCount,
+    uberSummary,
   } = data;
 
   // ── Month-over-month deltas ────────────────────────────────────────────────
@@ -361,8 +355,8 @@ export default function DashboardScreen() {
         )}
       </Card>
 
-      {/* ── Uber (all-time, doesn't disappear if no rides this month) ── */}
-      {uberCount > 0 && (
+      {/* ── Uber (this month, net of reimbursements — same figure as the Uber screen) ── */}
+      {uberSummary.rideCount > 0 && (
         <>
           <SectionHeader title="Uber" />
           <TouchableOpacity
@@ -374,9 +368,13 @@ export default function DashboardScreen() {
               <Icon name="car" size={28} color={CATEGORY_META.Uber.color} />
               <View>
                 <Text style={styles.uberLabel}>
-                  Total spent on Uber ({uberCount} ride{uberCount !== 1 ? 's' : ''})
+                  Uber this month ({uberSummary.rideCount} ride{uberSummary.rideCount !== 1 ? 's' : ''})
                 </Text>
-                <AmountText amount={uberTotal} type="expense" size={theme.font.size.lg} />
+                <AmountText
+                  amount={Math.abs(uberSummary.net)}
+                  type={uberSummary.net >= 0 ? 'expense' : 'income'}
+                  size={theme.font.size.lg}
+                />
               </View>
             </View>
             <Icon name="chevron-forward" size={18} color={theme.colors.textMuted} />
