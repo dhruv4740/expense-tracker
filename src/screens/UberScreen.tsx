@@ -21,12 +21,17 @@ import type { RootStackParamList } from '../../App';
 
 import {
   deleteTransaction,
+  getKnownSettlementCounterparties,
   getUberSummary,
+  getUnsettledRides,
   insertManual,
   queryTransactions,
+  setSettlement,
   updateTransaction,
 } from '../db';
 import type { TransactionRow, UberSummary } from '../db';
+import { suggestSettlements } from '../settle';
+import type { CandidateTx, Suggestion } from '../settle';
 import { DATA_CHANGED } from '../sync';
 import { AmountText, Card, EmptyState, Icon, SectionHeader } from '../components';
 import { theme } from '../theme';
@@ -45,14 +50,14 @@ function weekStart(d: Date = new Date()): Date {
   return start;
 }
 
-const RECENT_CREDITS_DAYS = 14;
-const RECENT_CREDITS_LIMIT = 5;
+const CANDIDATE_DAYS = 30;
+const SUGGESTION_LIMIT = 5;
 
 interface UberData {
   monthRows: TransactionRow[];
   summary: UberSummary;
   weekSummary: UberSummary;
-  recentCredits: TransactionRow[];
+  suggestions: Suggestion[];
 }
 
 function loadUberData(): UberData {
@@ -66,14 +71,37 @@ function loadUberData(): UberData {
   const weekFrom = weekStart().getTime();
   const weekSummary = getUberSummary({ from: weekFrom, to: Date.now() });
 
-  // Recent incoming payments not already tagged Uber — lets you tag a
-  // friend's pay-back in one tap instead of hunting for it in Transactions.
-  const creditsFrom = Date.now() - RECENT_CREDITS_DAYS * 86_400_000;
-  const recentCredits = queryTransactions({ types: ['income'], from: creditsFrom, to: Date.now() })
-    .filter(r => r.category !== 'Uber')
-    .slice(0, RECENT_CREDITS_LIMIT);
+  // Settlement suggestions. This used to be "the 5 most recent credits",
+  // ranked purely by recency with no relation to any ride, which is why
+  // salary and cashback showed up alongside real paybacks. We now score
+  // candidates against rides that actually have money outstanding.
+  //
+  // Note this queries BOTH directions: an outgoing payment settling a ride a
+  // friend paid for is the case the old income-only query could never catch.
+  const rides = getUnsettledRides({ from, to });
+  let suggestions: Suggestion[] = [];
+  if (rides.length > 0) {
+    const candidatesFrom = Date.now() - CANDIDATE_DAYS * 86_400_000;
+    const candidates = queryTransactions({
+      types: ['income', 'expense'],
+      from: candidatesFrom,
+      to: Date.now(),
+    }).filter(r => r.category !== 'Uber' && r.settles_id == null);
 
-  return { monthRows, summary, weekSummary, recentCredits };
+    suggestions = suggestSettlements(
+      candidates as CandidateTx[],
+      rides.map(r => ({
+        id: r.id,
+        amount: r.amount,
+        timestamp: r.timestamp,
+        outstanding: r.outstanding,
+      })),
+      { knownCounterparties: getKnownSettlementCounterparties() },
+      SUGGESTION_LIMIT,
+    );
+  }
+
+  return { monthRows, summary, weekSummary, suggestions };
 }
 
 function fmt(n: number): string {
@@ -127,7 +155,7 @@ function SplitFareCard() {
   }, []);
 
   const commit = useCallback(
-    (amount: number, note: string) => {
+    (amount: number, note: string, owed: number) => {
       insertManual({
         amount,
         merchant: 'Uber',
@@ -138,6 +166,10 @@ function SplitFareCard() {
         account: null,
         note,
         raw_text: null,
+        // Persisted rather than buried in `note`: this is what the
+        // reimbursement matcher scores candidates against. Without it there
+        // was nothing to match on, so suggestions were pure recency.
+        owed_amount: owed > 0.005 ? Math.round(owed * 100) / 100 : null,
       });
       DeviceEventEmitter.emit(DATA_CHANGED);
       reset();
@@ -164,7 +196,10 @@ function SplitFareCard() {
         total > 0 && n > 0
           ? `Split ₹${fmt(total)} ÷ ${n} (₹${fmt(fairShare)} each) · paid ₹${fmt(paid)} · received ₹${fmt(received)}`
           : `Paid ₹${fmt(paid)} · received ₹${fmt(received)}`;
-      commit(Math.round(net * 100) / 100, note);
+      // Still owed = what you fronted beyond your own share, less what's
+      // already come back.
+      const stillOwed = total > 0 && n > 0 ? paid - fairShare - received : 0;
+      commit(Math.round(net * 100) / 100, note, stillOwed);
       return;
     }
 
@@ -190,29 +225,40 @@ function SplitFareCard() {
     }).filter(r => r.channel !== 'manual' && r.amount >= share - 0.005);
 
     if (candidates.length === 0) {
-      commit(share, note);
+      commit(share, note, total - share);
       return;
     }
     const existing = candidates[0];
     Alert.alert(
-      'Possible double-count',
+      'Full fare already recorded',
       `A ₹${fmt(existing.amount)} Uber payment on ${formatDate(existing.timestamp)} is already recorded — ` +
-        `likely the full fare you paid. Exclude it and keep just your ₹${fmt(share)} share?`,
+        `likely the full fare you paid. Track the ₹${fmt(total - share)} your friends owe you against it?`,
       [
         {
-          text: 'Exclude it',
+          text: 'Yes, track what I’m owed',
           onPress: () => {
+            // Annotate the captured full-fare row instead of saving a second
+            // one. The previous flow flipped this row to type='self', which
+            // hid a real ride from every total AND from the transactions list
+            // (self is filtered out by default), with no way to undo it.
             if (existing.id != null) {
-              updateTransaction(existing.id, { type: 'self' });
+              updateTransaction(existing.id, {
+                owed_amount: Math.round((existing.amount - share) * 100) / 100,
+                note,
+              });
+              DeviceEventEmitter.emit(DATA_CHANGED);
+              reset();
             }
-            commit(share, note);
           },
         },
-        { text: 'Keep both', onPress: () => commit(share, note) },
+        {
+          text: 'Save separately',
+          onPress: () => commit(share, note, total - share),
+        },
         { text: 'Cancel', style: 'cancel' },
       ],
     );
-  }, [totalFare, splitCount, youPaid, youReceived, showAdjust, net, fairShare, timestamp, commit]);
+  }, [totalFare, splitCount, youPaid, youReceived, showAdjust, net, fairShare, timestamp, commit, reset]);
 
   return (
     <Card style={styles.splitCard}>
@@ -340,15 +386,18 @@ export default function UberScreen() {
     [navigation],
   );
 
-  const markUber = useCallback((item: TransactionRow) => {
-    if (item.id == null) {
+  // Link a suggested payment to the ride it settles. Reversible: the row stays
+  // visible in the transactions list and can be unlinked from its edit screen.
+  const linkSettlement = useCallback((s: Suggestion) => {
+    const id = s.candidate.id;
+    if (id == null) {
       return;
     }
-    updateTransaction(item.id, { category: 'Uber', category_source: 'manual' });
+    setSettlement(id, s.ride.id);
     DeviceEventEmitter.emit(DATA_CHANGED);
   }, []);
 
-  const { summary, weekSummary, recentCredits } = data;
+  const { summary, weekSummary, suggestions } = data;
 
   // Average per day you actually rode, not per calendar day — riding 15 of
   // 20 elapsed days divides by 15, so a light month doesn't look misleadingly
@@ -394,25 +443,38 @@ export default function UberScreen() {
 
       <SplitFareCard />
 
-      {recentCredits.length > 0 && (
+      {suggestions.length > 0 && (
         <>
-          <SectionHeader title="Recent Credits" />
+          <SectionHeader title="Settle up" />
           <Card style={styles.creditsCard}>
-            {recentCredits.map(item => (
-              <View key={item.id} style={styles.creditRow}>
+            {suggestions.map(s => (
+              <View key={s.candidate.id} style={styles.creditRow}>
                 <View style={styles.creditMain}>
                   <Text style={styles.merchant} numberOfLines={1}>
-                    {item.counterparty ?? item.merchant ?? item.source ?? 'Unknown'}
+                    {s.candidate.counterparty ??
+                      s.candidate.merchant ??
+                      'Unknown'}
                   </Text>
-                  <Text style={styles.date}>{formatDate(item.timestamp)}</Text>
+                  <Text style={styles.date}>
+                    {formatDate(s.candidate.timestamp)}
+                  </Text>
+                  {/* Why this was suggested — the old list gave no reason
+                      because it had none to give. */}
+                  <Text style={styles.reason} numberOfLines={2}>
+                    {s.reason}
+                  </Text>
                 </View>
-                <AmountText amount={item.amount} type="income" size={theme.font.size.sm} />
+                <AmountText
+                  amount={s.candidate.amount}
+                  type={s.candidate.type === 'income' ? 'income' : 'expense'}
+                  size={theme.font.size.sm}
+                />
                 <TouchableOpacity
                   style={styles.markUberBtn}
-                  onPress={() => markUber(item)}
+                  onPress={() => linkSettlement(s)}
                   activeOpacity={0.8}
                 >
-                  <Text style={styles.markUberText}>Mark Uber</Text>
+                  <Text style={styles.markUberText}>Link</Text>
                 </TouchableOpacity>
               </View>
             ))}
@@ -521,6 +583,10 @@ const styles = StyleSheet.create({
   date: {
     fontSize: theme.font.size.xs,
     color: theme.colors.textMuted,
+  },
+  reason: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.accent,
   },
   creditsCard: {
     marginHorizontal: theme.spacing.lg,

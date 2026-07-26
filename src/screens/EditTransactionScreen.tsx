@@ -30,6 +30,7 @@ import {
   getAllAccountBalances,
   getAccountBalance,
   setAccountBalance,
+  setSettlement,
 } from '../db';
 import type { TransactionRow, TransactionType } from '../db';
 import { GROUPED_CATEGORIES } from '../categories';
@@ -398,6 +399,35 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
         </View>
       </View>
 
+      {/* Settlement link — shown only when this row settles another one.
+          Every link MUST be undoable here: a settled row is excluded from
+          spend/income totals, and an exclusion the user can't find or reverse
+          is indistinguishable from lost data. */}
+      {tx?.settles_id != null && (
+        <>
+          <SectionHeader title="Settlement" />
+          <View style={styles.card}>
+            <Text style={styles.settlementText}>
+              This payment is linked to another transaction, so it isn’t counted
+              as separate spending.
+            </Text>
+            <TouchableOpacity
+              style={styles.unlinkBtn}
+              onPress={() => {
+                if (tx?.id != null) {
+                  setSettlement(tx.id, null);
+                  DeviceEventEmitter.emit(DATA_CHANGED);
+                  navigation.goBack();
+                }
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.unlinkText}>Unlink — count it on its own</Text>
+            </TouchableOpacity>
+          </View>
+        </>
+      )}
+
       {/* Note */}
       <SectionHeader title="Note (optional)" />
       <View
@@ -566,6 +596,20 @@ const styles = StyleSheet.create({
     color: theme.colors.textPrimary,
     padding: 0,
     paddingVertical: theme.spacing.sm,
+  },
+  settlementText: {
+    fontSize: theme.font.size.sm,
+    color: theme.colors.textSecondary,
+    marginBottom: theme.spacing.sm,
+  },
+  unlinkBtn: {
+    alignSelf: 'flex-start',
+    paddingVertical: theme.spacing.xs,
+  },
+  unlinkText: {
+    fontSize: theme.font.size.sm,
+    fontWeight: theme.font.weight.semibold,
+    color: theme.colors.accent,
   },
   noteInput: {
     minHeight: 64,

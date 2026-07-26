@@ -309,6 +309,16 @@ export default function DashboardScreen() {
             {' '}(not counted as spend)
           </Text>
         )}
+        {/* Transfers are excluded from spend and income (the underlying
+            expense is the real cost), so surface the figure here rather than
+            letting the money disappear from the app entirely. */}
+        {Math.abs(summary.transferred) > 0 && (
+          <Text style={styles.investedCaption}>
+            {summary.transferred > 0 ? 'Lent/paid out' : 'Received back'}: ₹
+            {Math.abs(summary.transferred).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+            {' '}(not counted as spend)
+          </Text>
+        )}
       </Card>
 
       {/* ── Spend trend ── */}
