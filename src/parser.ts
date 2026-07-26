@@ -91,12 +91,29 @@ const INCOME_RE = /\b(credited|received|refund)\b/i;
  * real merchant clause that follows it. A negative lookahead skips "your"
  * ("credited to your account") so that phrase is never captured as a merchant.
  */
-const MERCHANT_RE_EXPENSE = /\b(?:at|to|towards)\s+(?!your\b)([^.,;:!\n]+)/gi;
-const MERCHANT_RE_INCOME = /\b(?:at|to|towards|from)\s+(?!your\b)([^.,;:!\n]+)/gi;
+// "." is allowed INSIDE the capture (a sentence-final period is stripped
+// separately below) — excluding it truncated every dotted VPA and abbreviated
+// name: "john.doe@okhdfcbank" -> "john", "Dr. Mehta Clinic" -> "Dr".
+const MERCHANT_RE_EXPENSE = /\b(?:at|to|towards)\s+(?!your\b)([^,;:!\n]+)/gi;
+const MERCHANT_RE_INCOME = /\b(?:at|to|towards|from)\s+(?!your\b)([^,;:!\n]+)/gi;
 
-/** UPI VPA pattern: word.chars@word (at least 2-letter domain), not an email
- * (emails continue with a ".tld" after the domain; VPAs don't). */
-const VPA_RE = /[\w.\-]+@[a-z]{2,}(?!\.[a-z]{2,})/i;
+/**
+ * Clauses where "to"/"at" introduces an instruction, not a payee. Without this
+ * "Call 18002586161 to report fraud immediately" stored a merchant of
+ * "report fraud immediately".
+ */
+const MERCHANT_INSTRUCTION_RE =
+  /^(?:report|dispute|block|call|know|check|view|avoid|stop|unsubscribe|opt|claim|activate|verify|update|register|download|login|log in|see|visit)\b/i;
+
+/**
+ * UPI VPA: handle@provider, rejecting email addresses. The provider label is
+ * captured greedily and then checked for a dotted TLD — the previous inline
+ * negative lookahead could be defeated by backtracking, which yielded
+ * "care@hdfcban" from "care@hdfcbank.com" and let a bank support address
+ * become a counterparty (and, via "apply to all", a merchant rule matching
+ * every SMS from that bank).
+ */
+const VPA_CANDIDATE_RE = /[\w.\-]+@[a-z][a-z0-9\-]*(?:\.[a-z]{2,})*/i;
 
 /**
  * Indian mobile phone — optional +91 or 0 prefix, then 10 digits starting with
@@ -157,6 +174,23 @@ function closerKeywordIsExpense(body: string, amountIndex: number): boolean {
   return nearestExpenseDist <= nearestIncomeDist;
 }
 
+/**
+ * True when a refund/reversal keyword sits closer to the matched amount than
+ * any expense keyword does — i.e. the refund is describing THIS amount rather
+ * than an unrelated original charge mentioned in the same message.
+ */
+function refundIsNearestToAmount(body: string, amountIndex: number): boolean {
+  let nearestRefund = Infinity;
+  for (const m of body.matchAll(new RegExp(REFUND_RE.source, 'gi'))) {
+    nearestRefund = Math.min(nearestRefund, Math.abs((m.index ?? 0) - amountIndex));
+  }
+  let nearestExpense = Infinity;
+  for (const m of body.matchAll(new RegExp(EXPENSE_RE.source, 'gi'))) {
+    nearestExpense = Math.min(nearestExpense, Math.abs((m.index ?? 0) - amountIndex));
+  }
+  return nearestRefund < nearestExpense;
+}
+
 /** Finds a plausible counterparty phone number, skipping reference/UTR/RRN/txn numbers. */
 function findCounterpartyPhone(body: string): string | null {
   for (const m of body.matchAll(new RegExp(PHONE_RE.source, PHONE_RE.flags))) {
@@ -181,13 +215,34 @@ function extractMerchant(body: string, isExpense: boolean): string | null {
   re.lastIndex = 0;
   for (const m of body.matchAll(re)) {
     let raw = m[1];
+    // Cut at a sentence boundary: a period followed by whitespace. A period
+    // inside a token ("john.doe@ybl", "Dr.Mehta", "5.00") is preserved.
+    raw = raw.split(/\.\s/)[0];
     raw = raw.replace(MERCHANT_NOISE_RE, '');
     raw = raw.replace(/[.,;!?]+$/, '').trim();
-    if (raw && !/^\d+$/.test(raw)) {
-      return raw;
+    if (!raw || /^\d+$/.test(raw)) {
+      continue;
     }
+    if (MERCHANT_INSTRUCTION_RE.test(raw)) {
+      continue;
+    }
+    return raw;
   }
   return null;
+}
+
+/**
+ * A UPI VPA, or null if the candidate is really an email address. Emails carry
+ * a dotted TLD ("care@hdfcbank.com"); VPAs don't ("rahul@okhdfcbank").
+ */
+function extractVpa(body: string): string | null {
+  const m = body.match(VPA_CANDIDATE_RE);
+  if (!m) {
+    return null;
+  }
+  const value = m[0].toLowerCase();
+  const domain = value.slice(value.indexOf('@') + 1);
+  return domain.includes('.') ? null : value;
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
@@ -246,11 +301,20 @@ export function parseTransaction(
   }
 
   let isExpense: boolean;
-  if (REFUND_RE.test(body) && isIncomeKeyword) {
-    // "Refund of Rs.500 credited… originally debited on…" contains both
-    // keyword sets; a refund/reversal message with a credit keyword is
-    // always income, even though "debited" also appears (referring to the
-    // original, now-reversed, charge).
+  if (REFUND_RE.test(body) && isIncomeKeyword && !isExpenseKeyword) {
+    // Pure refund message ("Refund of Rs.500 credited to your A/c") — income.
+    isExpense = false;
+  } else if (
+    REFUND_RE.test(body) &&
+    isIncomeKeyword &&
+    refundIsNearestToAmount(body, amountMatch.index ?? 0)
+  ) {
+    // A refund keyword used to win UNCONDITIONALLY, which inverted whole
+    // messages: "Rs.2499 debited at AMAZON. Your refund of Rs.300 has been
+    // credited" was stored as ₹2499 of INCOME, because AMOUNT_RE also takes
+    // the FIRST amount in the string. One message, a ~₹5000 error. The refund
+    // now only wins when it is the keyword actually describing the amount we
+    // matched.
     isExpense = false;
   } else if (isExpenseKeyword && isIncomeKeyword) {
     // Both keyword sets matched and it's not a refund — pick whichever
@@ -270,9 +334,9 @@ export function parseTransaction(
   // ── 4. Counterparty (priority: VPA > phone > directional account fragment) ─
   let counterparty: string | null = null;
 
-  const vpaMatch = body.match(VPA_RE);
-  if (vpaMatch) {
-    counterparty = vpaMatch[0].toLowerCase();
+  const vpa = extractVpa(body);
+  if (vpa) {
+    counterparty = vpa;
   } else {
     const phoneDigits = findCounterpartyPhone(body);
     if (phoneDigits) {

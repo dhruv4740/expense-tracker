@@ -257,7 +257,10 @@ describe('parseTransaction', () => {
     const result = parseTransaction('HDFCBK', body, Date.now());
 
     expect(result).not.toBeNull();
-    expect(result!.counterparty).not.toBe('care@hdfcbank');
+    // Asserting `not.toBe('care@hdfcbank')` passed vacuously: the regex
+    // actually returned the truncated 'care@hdfcban', so the email WAS being
+    // stored as a counterparty. Assert the real requirement instead.
+    expect(result!.counterparty).toBeNull();
   });
 
   // ── 26. "credited to your account" is not captured as the merchant ───────

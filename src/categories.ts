@@ -149,90 +149,134 @@ export const GROUPED_CATEGORIES: Array<{ group: CategoryGroup; categories: Categ
 
 // ─── Keyword map ──────────────────────────────────────────────────────────────
 
-const KEYWORD_MAP: Array<{ keywords: string[]; category: Category }> = [
+/**
+ * Two tiers per category, because matching everything against the raw SMS body
+ * was the single biggest source of wrong categories:
+ *
+ *   `brands`   — distinctive enough to trust ANYWHERE, including the raw body.
+ *                Nothing here should plausibly appear in bank boilerplate.
+ *   `keywords` — only matched against the merchant/counterparty. These are
+ *                generic words ("bill", "loan", "rent", "gas", "@") that occur
+ *                constantly in bank footers. Matching them against the body
+ *                meant "spent at Barbeque Nation, your credit card bill is due"
+ *                filed as Bills, and any message containing an email address
+ *                filed as UPI.
+ *
+ * Order still matters (first match wins) within each tier.
+ */
+const KEYWORD_MAP: Array<{
+  brands: string[];
+  keywords: string[];
+  category: Category;
+}> = [
   {
+    // 'uber eats' sits in Food and Food precedes Uber, so a food-delivery
+    // order is never counted as a ride — that used to silently corrupt the
+    // ride stats and the fare-split averages.
+    brands: [
+      'uber eats', 'ubereats', 'swiggy', 'zomato', 'dominos', 'pizza hut',
+      'mcdonald', 'kfc', 'starbucks', 'faasos', 'behrouz', 'eatsure',
+    ],
     keywords: [
-      'swiggy', 'zomato', 'restaurant', 'cafe', 'food', 'pizza', 'burger',
+      'restaurant', 'cafe', 'food', 'pizza', 'burger',
       'biryani', 'diner', 'kitchen', 'eatery', 'dhaba', 'canteen', 'bakery',
     ],
     category: 'Food',
   },
   {
-    keywords: [
+    brands: [
       'bigbasket', 'blinkit', 'zepto', 'dmart', 'grofers', 'instamart',
-      'jiomart', 'grocery', 'supermarket', 'vegetables', 'fruits',
+      'jiomart',
     ],
+    keywords: ['grocery', 'supermarket', 'vegetables', 'fruits'],
     category: 'Groceries',
   },
   {
-    // Checked before Transport (first match wins) so Uber rides get their
-    // own category; Ola/Rapido/fuel/etc. stay Transport.
+    // 'uber one' is a subscription, not a ride — checked before bare 'uber'.
+    brands: ['uber one'],
+    keywords: [],
+    category: 'Bills',
+  },
+  {
+    // Merchant-only: a body mention of "uber" (cashback offers, statement
+    // summaries, Uber Eats footers) must not manufacture a phantom ride.
+    brands: [],
     keywords: ['uber'],
     category: 'Uber',
   },
   {
+    brands: ['irctc', 'rapido', 'redbus', 'fastag', 'olacabs'],
     keywords: [
-      'ola', 'irctc', 'fuel', 'petrol', 'diesel', 'metro', 'bus',
-      'rapido', 'taxi', 'cab', 'railway', 'flight', 'airline', 'redbus',
-      'parking', 'toll', 'fastag',
+      'ola', 'fuel', 'petrol', 'diesel', 'metro', 'bus',
+      'taxi', 'cab', 'railway', 'flight', 'airline',
+      'parking', 'toll',
     ],
     category: 'Transport',
   },
   {
-    keywords: [
+    brands: [
       'amazon', 'flipkart', 'myntra', 'meesho', 'nykaa', 'ajio', 'snapdeal',
       'shopclues', 'tatacliq', 'reliance digital', 'croma', 'vijay sales',
     ],
+    keywords: [],
     category: 'Shopping',
   },
   {
-    keywords: [
+    brands: [
       'netflix', 'spotify', 'hotstar', 'prime video', 'bookmyshow', 'pvr',
-      'inox', 'youtube', 'disney', 'zee5', 'sonyliv', 'gaming', 'steam',
+      'inox', 'youtube', 'disney', 'zee5', 'sonyliv', 'steam',
       'playstation', 'xbox',
     ],
+    keywords: ['gaming'],
     category: 'Entertainment',
   },
   {
-    // Checked before Bills/UPI (first match wins) so SIP/NACH mandate debits
-    // and demat-account SMS land here instead of Bills ("emi") or UPI ("@").
-    keywords: [
-      'mutual fund', 'iccl', 'sip', 'nach', 'zerodha', 'groww', 'upstox',
-      'kite', 'smallcase', 'demat', 'nse', 'bse', 'etf', 'folio', 'indmoney',
-      'mf',
+    // Checked before Bills/UPI so SIP/NACH mandate debits and demat-account
+    // SMS land here instead of Bills ("emi") or UPI ("@").
+    brands: [
+      'zerodha', 'groww', 'upstox', 'smallcase', 'indmoney', 'mutual fund',
+      'iccl',
     ],
+    keywords: ['sip', 'nach', 'kite', 'demat', 'nse', 'bse', 'etf', 'folio', 'mf'],
     category: 'Investment',
   },
   {
     // Checked before Bills ("fee"/"bill" would otherwise misfire on tuition
     // fee / library fine notices).
+    brands: ['udemy', 'coursera', 'unacademy', 'byjus'],
     keywords: [
-      'college', 'university', 'exam', 'fees', 'course', 'udemy', 'coursera',
+      'college', 'university', 'exam', 'fees', 'course',
       'tuition', 'coaching', 'books', 'stationery', 'library',
     ],
     category: 'Education',
   },
   {
+    brands: ['billdesk', 'tata power', 'adani electricity', 'jio', 'airtel', 'vodafone'],
     keywords: [
-      'electricity', 'recharge', 'bill', 'billdesk', 'dth', 'broadband',
+      'electricity', 'recharge', 'bill', 'dth', 'broadband',
       'insurance', 'emi', 'loan', 'postpaid', 'prepaid', 'utility', 'gas',
       'water', 'maintenance', 'rent', 'subscription',
     ],
     category: 'Bills',
   },
   {
+    brands: ['apollo', 'pharmeasy', '1mg', 'netmeds', 'practo'],
     keywords: [
-      'pharmacy', 'apollo', 'pharmeasy', '1mg', 'hospital', 'clinic',
+      'pharmacy', 'hospital', 'clinic',
       'medical', 'doctor', 'dental', 'health', 'medicine', 'lab', 'pathology',
-      'diagnostic', 'netmeds',
+      'diagnostic',
     ],
     category: 'Health',
   },
   {
+    // Merchant-only. '@' in particular used to match any support email in a
+    // bank footer and force an unrelated card purchase into UPI.
+    brands: [],
     keywords: ['upi', 'vpa', '@'],
     category: 'UPI',
   },
   {
+    brands: [],
     keywords: ['atm', 'cash withdrawal', 'cash deposit', 'withdrawn'],
     category: 'Cash',
   },
@@ -255,24 +299,51 @@ function escapeRegExp(s: string): string {
  * word boundaries (it's not a word character on either side), so it's
  * special-cased to a plain substring check.
  */
-const COMPILED_KEYWORD_MAP: Array<{ category: Category; test: (haystack: string) => boolean }> =
-  KEYWORD_MAP.map(({ keywords, category }) => {
-    const hasAt = keywords.includes('@');
-    const wordKeywords = keywords.filter(k => k !== '@');
-    const boundaryRe =
-      wordKeywords.length > 0
-        ? new RegExp(
-            `(?<![a-z0-9])(?:${wordKeywords.map(escapeRegExp).join('|')})(?![a-z0-9])`,
-            'i',
-          )
-        : null;
-    return {
-      category,
-      test: (haystack: string) =>
-        (boundaryRe !== null && boundaryRe.test(haystack)) ||
-        (hasAt && haystack.includes('@')),
-    };
-  });
+function compileMatcher(keywords: string[]): (haystack: string) => boolean {
+  const hasAt = keywords.includes('@');
+  const wordKeywords = keywords.filter(k => k !== '@');
+  const boundaryRe =
+    wordKeywords.length > 0
+      ? new RegExp(
+          `(?<![a-z0-9])(?:${wordKeywords.map(escapeRegExp).join('|')})(?![a-z0-9])`,
+          'i',
+        )
+      : null;
+  return (haystack: string) =>
+    (boundaryRe !== null && boundaryRe.test(haystack)) ||
+    (hasAt && haystack.includes('@'));
+}
+
+/**
+ * `testName` matches brands + generic keywords (used against merchant and
+ * counterparty only); `testBody` matches brands alone (safe against the raw
+ * message text). See the KEYWORD_MAP docblock for why the two tiers exist.
+ */
+const COMPILED_KEYWORD_MAP: Array<{
+  category: Category;
+  testName: (haystack: string) => boolean;
+  testBody: (haystack: string) => boolean;
+}> = KEYWORD_MAP.map(({ brands, keywords, category }) => ({
+  category,
+  testName: compileMatcher([...brands, ...keywords]),
+  testBody: brands.length > 0 ? compileMatcher(brands) : () => false,
+}));
+
+/**
+ * The first sentence of a message, lowercased. Splits on a period/newline
+ * followed by whitespace, so decimal amounts ("Rs.600.00") stay intact.
+ */
+function leadingClause(body: string): string {
+  return body.split(/(?:\.|\n)\s/)[0].toLowerCase();
+}
+
+/** Credits that are genuinely the user's own income, not money moving between people. */
+const INCOME_SIGNAL_RE =
+  /\b(salary|payroll|interest|dividend|cashback|matured|maturity|pension|stipend|bonus)\b/i;
+
+/** A person-to-person UPI handle (as opposed to a merchant/business VPA). */
+const MERCHANT_VPA_RE =
+  /\b(payments?|pay|billdesk|razorpay|payu|merchant|store|retail|enterprises?|pvt|ltd)\b/i;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -301,7 +372,17 @@ export function normalizeMerchantKey(
  * are unaffected since they don't match this pattern.
  */
 export function isGenericMerchantKey(key: string): boolean {
-  return /^\d{1,5}$/.test(key);
+  if (/^\d{1,5}$/.test(key)) {
+    return true;
+  }
+  // Bank support/no-reply addresses. These are shared by every message from
+  // that bank, so a rule keyed on one silently recategorizes the user's whole
+  // history with them. The parser no longer emits these as counterparties, but
+  // installs that ran the older build may already have one stored.
+  if (/^(?:care|support|noreply|no-reply|donotreply|alerts?|info|service)[@.\-]/i.test(key)) {
+    return true;
+  }
+  return false;
 }
 
 // ─── Main categorize function ─────────────────────────────────────────────────
@@ -345,22 +426,77 @@ export function categorize(
     }
   }
 
-  // 1b. Income defaults to the Income category rather than matching spend
-  // keywords in the body (a refund from Swiggy shouldn't land in Food).
+  const name = `${merchant ?? ''} ${counterparty ?? ''}`.toLowerCase();
+
+  // 1b. Credits. Previously EVERY credit collapsed to 'Income' before the
+  // keyword map ran, so salary, refunds, cashback and a friend's fare payback
+  // were one undifferentiated bucket — and the Uber screen's
+  // `category !== 'Uber'` filter consequently excluded nothing.
   if (isExpense === false) {
-    return 'Income';
+    return categorizeCredit(name, body);
   }
 
-  // 2. Keyword match across merchant + counterparty + raw body.
-  const haystack =
-    `${merchant ?? ''} ${counterparty ?? ''} ${body}`.toLowerCase();
-
-  for (const { category, test } of COMPILED_KEYWORD_MAP) {
-    if (test(haystack)) {
+  // 2a. Merchant/counterparty tier — brands AND generic keywords.
+  for (const { category, testName } of COMPILED_KEYWORD_MAP) {
+    if (testName(name)) {
       return category;
     }
   }
 
-  // 3. Default.
+  // 2b. Leading-clause tier — brands AND generic keywords, but only against
+  // the first sentence. This is where the transaction itself is described
+  // ("Rs.5000 debited for college tuition fees"); the footers that carry the
+  // misleading generic words ("Your credit card bill is due", "Dispute?
+  // care@hdfcbank.com", "Avl Bal ...") always come later.
+  const lead = leadingClause(body);
+  for (const { category, testName } of COMPILED_KEYWORD_MAP) {
+    if (testName(lead)) {
+      return category;
+    }
+  }
+
+  // 2c. Full-body tier — distinctive brand names only. Generic words are
+  // deliberately NOT matched here; they used to outrank the real merchant.
+  const bodyHaystack = body.toLowerCase();
+  for (const { category, testBody } of COMPILED_KEYWORD_MAP) {
+    if (testBody(bodyHaystack)) {
+      return category;
+    }
+  }
+
+  // 3. Default. 'Other' surfaces in the Review queue, where the user's pick
+  // also teaches a merchant rule — better than a confident wrong guess.
   return 'Other';
+}
+
+/**
+ * Category for an incoming payment. Distinguishes real income from money simply
+ * moving between people, which is what makes fare-split netting possible.
+ */
+function categorizeCredit(name: string, body: string): Category {
+  const haystack = `${name} ${body}`.toLowerCase();
+
+  // Explicit income signals win — a salary credit is not a friend transfer.
+  if (INCOME_SIGNAL_RE.test(haystack)) {
+    return 'Income';
+  }
+
+  // A refund is money coming back from a merchant; keep it in that merchant's
+  // category so it nets against the original spend.
+  if (/\b(refund|reversal|reversed)\b/i.test(haystack)) {
+    for (const { category, testName } of COMPILED_KEYWORD_MAP) {
+      if (testName(name)) {
+        return category;
+      }
+    }
+    return 'Income';
+  }
+
+  // A credit from a personal UPI handle is almost always someone paying you
+  // back, not income. Business/merchant VPAs are excluded.
+  if (name.includes('@') && !MERCHANT_VPA_RE.test(name)) {
+    return 'Friend Transfer';
+  }
+
+  return 'Income';
 }
