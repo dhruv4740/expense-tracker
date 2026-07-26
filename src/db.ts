@@ -25,6 +25,15 @@ export interface TransactionRow {
   dedup_key?: string;
   /** null for all pre-migration history — never participates in soft-dedup drops. */
   channel?: Channel | null;
+  /**
+   * This row is money moving to settle transaction `settles_id` — e.g. paying a
+   * friend back for their share of a ride you already recorded. Settling rows
+   * are excluded from spend/income totals (the settled row is the real cost)
+   * but stay visible in the transactions list.
+   */
+  settles_id?: number | null;
+  /** On a split expense: how much the user expects to be paid back. */
+  owed_amount?: number | null;
 }
 
 export interface Range {
@@ -39,6 +48,13 @@ export interface Summary {
   /** Sum of expense-type Investment-category transactions in the range —
    * tracked separately since SIPs/mutual funds aren't "spending". */
   invested: number;
+  /**
+   * Net money moved to/from other people (Friend Transfer, Loan/Dues) in the
+   * range: positive = you paid out more than you got back. Excluded from
+   * `spent`/`received` but surfaced here so the money stays visible rather
+   * than silently vanishing from the app.
+   */
+  transferred: number;
   byCategory: { category: string; total: number }[];
   byDay: { day: number; total: number }[];
 }
@@ -56,6 +72,30 @@ export interface UberSummary {
 
 /** Category excluded from spend totals/charts (tracked separately as `invested`). */
 const INVESTMENT_CATEGORY = 'Investment';
+
+/**
+ * Categories that move money between people rather than spending it. Excluded
+ * from both `spent` and `received` (and surfaced separately as `transferred`)
+ * for the same reason Investment is: paying a friend back for a shared fare
+ * isn't new spending, and them paying you back isn't income — the underlying
+ * expense row is the real cost. Counting both double-counted every fare split.
+ */
+const TRANSFER_CATEGORIES = ['Friend Transfer', 'Loan/Dues'];
+
+/** `?, ?` placeholder list + params for the categories excluded from spend. */
+const NON_SPEND_CATEGORIES = [INVESTMENT_CATEGORY, ...TRANSFER_CATEGORIES];
+const NON_SPEND_PLACEHOLDERS = NON_SPEND_CATEGORIES.map(() => '?').join(', ');
+
+/** An Uber ride with money still owed back on it. */
+export interface UnsettledRide {
+  id: number;
+  amount: number;
+  timestamp: number;
+  /** What the user declared they expect back when saving the split. */
+  owedAmount: number;
+  /** owedAmount minus everything already linked as settling this ride. */
+  outstanding: number;
+}
 
 export interface Budget {
   category: string;
@@ -87,7 +127,7 @@ export interface TransactionFilters {
 
 let db: DB | null = null;
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 function requireDb(): DB {
   if (!db) {
@@ -176,8 +216,43 @@ function migrate(conn: DB): void {
   // participates in the cross-channel soft-dedup check (see insertTransaction).
   if (version < 3) {
     conn.executeSync('ALTER TABLE transactions ADD COLUMN channel TEXT;');
-    conn.executeSync(`PRAGMA user_version = ${SCHEMA_VERSION};`);
+    // Literal 3, NOT SCHEMA_VERSION — interpolating the constant here would
+    // stamp the newest version onto a v2 install and silently skip every
+    // later migration step.
+    conn.executeSync('PRAGMA user_version = 3;');
     version = 3;
+  }
+
+  // v3 → v4: settlement links. Additive-only, no backfill — every existing row
+  // gets settles_id = NULL / owed_amount = NULL and keeps behaving exactly as
+  // it does today (reimbursements hand-tagged 'Uber' still net via the legacy
+  // category path in getUberSummary).
+  //
+  //  settles_id  — this row is money moving to settle row N. It is NOT
+  //                independent spend/income, so it's excluded from every
+  //                total, but it stays VISIBLE in the transactions list
+  //                (unlike type='self', which is hidden by default and so
+  //                read as data loss).
+  //  owed_amount — on a split expense: how much the user expects back. Without
+  //                this there is nothing for the reimbursement matcher to
+  //                match against, which is why the old suggestions were
+  //                pure recency.
+  if (version < 4) {
+    conn.executeSync('ALTER TABLE transactions ADD COLUMN settles_id INTEGER;');
+    conn.executeSync('ALTER TABLE transactions ADD COLUMN owed_amount REAL;');
+    conn.executeSync(
+      'CREATE INDEX IF NOT EXISTS idx_tx_settles ON transactions(settles_id);',
+    );
+    conn.executeSync('PRAGMA user_version = 4;');
+    version = 4;
+  }
+
+  // Catches a bumped SCHEMA_VERSION with no matching migration step — the
+  // failure mode the interpolated PRAGMA above used to cause silently.
+  if (version !== SCHEMA_VERSION) {
+    throw new Error(
+      `Migration incomplete: at v${version}, expected v${SCHEMA_VERSION}`,
+    );
   }
 }
 
@@ -264,8 +339,9 @@ export function insertManual(
   const res = conn.executeSync(
     `INSERT INTO transactions
        (amount, merchant, source, raw_text, category, timestamp, type,
-        counterparty, account, note, category_source, dedup_key, channel)
-     VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, 'manual', ?, 'manual')`,
+        counterparty, account, note, category_source, dedup_key, channel,
+        settles_id, owed_amount)
+     VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, 'manual', ?, 'manual', ?, ?)`,
     [
       tx.amount,
       tx.merchant ?? null,
@@ -277,6 +353,8 @@ export function insertManual(
       tx.account ?? null,
       tx.note ?? null,
       dedup_key,
+      tx.settles_id ?? null,
+      tx.owed_amount ?? null,
     ],
   );
 
@@ -293,6 +371,8 @@ const EDITABLE_FIELDS: Array<keyof TransactionRow> = [
   'account',
   'note',
   'category_source',
+  'settles_id',
+  'owed_amount',
 ];
 
 export function updateTransaction(
@@ -324,6 +404,13 @@ export function updateTransaction(
 
 export function deleteTransaction(id: number): boolean {
   const conn = requireDb();
+  // SQLite enforces no foreign keys here, so unlink any rows that settled this
+  // one FIRST. Leaving a dangling settles_id would keep those rows excluded
+  // from every total, silently hiding real money once its parent is gone.
+  conn.executeSync(
+    'UPDATE transactions SET settles_id = NULL WHERE settles_id = ?',
+    [id],
+  );
   const res = conn.executeSync('DELETE FROM transactions WHERE id = ?', [id]);
   return res.rowsAffected > 0;
 }
@@ -348,6 +435,12 @@ function mapRow(row: Record<string, unknown>): TransactionRow {
     note: row.note != null ? String(row.note) : null,
     category_source: row.category_source === 'manual' ? 'manual' : 'auto',
     dedup_key: row.dedup_key != null ? String(row.dedup_key) : undefined,
+    // channel was previously dropped here, so every row read back had
+    // channel === undefined and any `row.channel !== 'manual'` guard silently
+    // passed for ALL rows (see the Uber double-count guard).
+    channel: row.channel != null ? (String(row.channel) as Channel) : null,
+    settles_id: row.settles_id != null ? Number(row.settles_id) : null,
+    owed_amount: row.owed_amount != null ? Number(row.owed_amount) : null,
   };
 }
 
@@ -430,17 +523,37 @@ export function getSummary(range: Range): Summary {
   const conn = requireDb();
   const { from, to } = range;
 
+  // `received` previously summed EVERY income row with no category filter, so
+  // a friend's payback tagged 'Uber' both reduced the Uber category net AND
+  // inflated "Received" (and therefore `net`) — the same money counted twice
+  // in opposite directions. It now excludes settling rows and the non-spend
+  // categories, which are reported separately as `transferred`.
   const totalsRes = conn.executeSync(
     `SELECT
-        COALESCE(SUM(CASE WHEN type = 'income'  THEN amount END), 0) AS received,
-        COALESCE(SUM(CASE WHEN type = 'expense' AND category = ?  THEN amount END), 0) AS invested
+        COALESCE(SUM(CASE WHEN type = 'income'
+                           AND settles_id IS NULL
+                           AND category NOT IN (${NON_SPEND_PLACEHOLDERS})
+                          THEN amount END), 0) AS received,
+        COALESCE(SUM(CASE WHEN type = 'expense' AND category = ?
+                          THEN amount END), 0) AS invested,
+        COALESCE(SUM(CASE WHEN category IN (${TRANSFER_CATEGORIES.map(() => '?').join(', ')})
+                           AND type IN ('expense', 'income')
+                          THEN CASE WHEN type = 'expense' THEN amount ELSE -amount END
+                     END), 0) AS transferred
        FROM transactions
       WHERE timestamp BETWEEN ? AND ?`,
-    [INVESTMENT_CATEGORY, from, to],
+    [
+      ...NON_SPEND_CATEGORIES,
+      INVESTMENT_CATEGORY,
+      ...TRANSFER_CATEGORIES,
+      from,
+      to,
+    ],
   );
   const totRow = (totalsRes.rows ?? [])[0] ?? {};
   const received = Number(totRow.received ?? 0);
   const invested = Number(totRow.invested ?? 0);
+  const transferred = Number(totRow.transferred ?? 0);
 
   // Nets income against expense within the same category (e.g. a debit and a
   // credit both tagged "Uber" cancel out) so a category's total reflects what
@@ -453,10 +566,13 @@ export function getSummary(range: Range): Summary {
                      WHEN type = 'income'  THEN -amount
                      ELSE 0 END) AS total
        FROM transactions
-      WHERE type IN ('expense', 'income') AND category != ? AND timestamp BETWEEN ? AND ?
+      WHERE type IN ('expense', 'income')
+        AND settles_id IS NULL
+        AND category NOT IN (${NON_SPEND_PLACEHOLDERS})
+        AND timestamp BETWEEN ? AND ?
       GROUP BY category
       ORDER BY total DESC`,
-    [INVESTMENT_CATEGORY, from, to],
+    [...NON_SPEND_CATEGORIES, from, to],
   );
   const byCategory = (catRes.rows ?? []).map(row => ({
     category: String(row.category ?? ''),
@@ -486,17 +602,28 @@ export function getSummary(range: Range): Summary {
   const dayRes = conn.executeSync(
     `SELECT CAST((timestamp + ?) / 86400000 AS INTEGER) AS day, SUM(amount) AS total
        FROM transactions
-      WHERE type = 'expense' AND category != ? AND timestamp BETWEEN ? AND ?
+      WHERE type = 'expense'
+        AND settles_id IS NULL
+        AND category NOT IN (${NON_SPEND_PLACEHOLDERS})
+        AND timestamp BETWEEN ? AND ?
       GROUP BY day
       ORDER BY day ASC`,
-    [tzOffsetMs, INVESTMENT_CATEGORY, from, to],
+    [tzOffsetMs, ...NON_SPEND_CATEGORIES, from, to],
   );
   const byDay = (dayRes.rows ?? []).map(row => ({
     day: Number(row.day ?? 0),
     total: Number(row.total ?? 0),
   }));
 
-  return { spent, received, net: received - spent, invested, byCategory, byDay };
+  return {
+    spent,
+    received,
+    net: received - spent,
+    invested,
+    transferred,
+    byCategory,
+    byDay,
+  };
 }
 
 /**
@@ -509,32 +636,120 @@ export function getUberSummary(range: Range): UberSummary {
   const conn = requireDb();
   const { from, to } = range;
 
+  // Rides = Uber-category expenses that are NOT themselves settling something.
+  // Reimbursements come from two places:
+  //   1. rows explicitly linked via settles_id to a ride in range (any
+  //      category — a friend's payback usually lands in Friend Transfer/UPI,
+  //      not Uber, which is exactly why category-only netting missed it); and
+  //   2. legacy: income hand-tagged 'Uber' with no link, which is how every
+  //      pre-v4 reimbursement is recorded. Kept so existing history keeps
+  //      netting exactly as it did before the migration.
   const totalsRes = conn.executeSync(
     `SELECT
         COALESCE(SUM(CASE WHEN type = 'expense' THEN amount END), 0) AS spent,
-        COALESCE(SUM(CASE WHEN type = 'income'  THEN amount END), 0) AS reimbursed,
-        COALESCE(SUM(CASE WHEN type = 'expense' THEN 1 END), 0) AS rideCount,
-        COALESCE(SUM(CASE WHEN type = 'income'  THEN 1 END), 0) AS reimbursementCount
+        COALESCE(SUM(CASE WHEN type = 'expense' THEN 1 END), 0) AS rideCount
        FROM transactions
-      WHERE category = 'Uber' AND type IN ('expense', 'income') AND timestamp BETWEEN ? AND ?`,
+      WHERE category = 'Uber' AND type IN ('expense', 'income')
+        AND settles_id IS NULL AND timestamp BETWEEN ? AND ?`,
     [from, to],
   );
+
+  const reimbRes = conn.executeSync(
+    `SELECT COALESCE(SUM(amount), 0) AS reimbursed, COUNT(*) AS reimbursementCount
+       FROM (
+         SELECT s.amount AS amount
+           FROM transactions s
+           JOIN transactions ride ON ride.id = s.settles_id
+          WHERE ride.category = 'Uber'
+            AND ride.type = 'expense'
+            AND ride.timestamp BETWEEN ? AND ?
+         UNION ALL
+         SELECT amount
+           FROM transactions
+          WHERE category = 'Uber' AND type = 'income'
+            AND settles_id IS NULL AND timestamp BETWEEN ? AND ?
+       )`,
+    [from, to, from, to],
+  );
   const totRow = (totalsRes.rows ?? [])[0] ?? {};
+  const reimbRow = (reimbRes.rows ?? [])[0] ?? {};
   const spent = Number(totRow.spent ?? 0);
-  const reimbursed = Number(totRow.reimbursed ?? 0);
   const rideCount = Number(totRow.rideCount ?? 0);
-  const reimbursementCount = Number(totRow.reimbursementCount ?? 0);
+  const reimbursed = Number(reimbRow.reimbursed ?? 0);
+  const reimbursementCount = Number(reimbRow.reimbursementCount ?? 0);
 
   const tzOffsetMs = localTzOffsetMs();
   const activeDaysRes = conn.executeSync(
     `SELECT COUNT(DISTINCT CAST((timestamp + ?) / 86400000 AS INTEGER)) AS activeDays
        FROM transactions
-      WHERE category = 'Uber' AND type = 'expense' AND timestamp BETWEEN ? AND ?`,
+      WHERE category = 'Uber' AND type = 'expense'
+        AND settles_id IS NULL AND timestamp BETWEEN ? AND ?`,
     [tzOffsetMs, from, to],
   );
   const activeDays = Number((activeDaysRes.rows ?? [])[0]?.activeDays ?? 0);
 
   return { spent, reimbursed, net: spent - reimbursed, rideCount, reimbursementCount, activeDays };
+}
+
+/**
+ * Uber rides in the range that declared an `owed_amount` and haven't been fully
+ * paid back yet, with how much is still outstanding. This is what the
+ * reimbursement matcher scores candidates against — before v4 nothing recorded
+ * what the user was owed, so there was nothing to match on and the "suggestions"
+ * were just the most recent credits.
+ */
+export function getUnsettledRides(range: Range): UnsettledRide[] {
+  const conn = requireDb();
+  const res = conn.executeSync(
+    `SELECT r.id, r.amount, r.timestamp, r.owed_amount,
+            COALESCE((SELECT SUM(s.amount) FROM transactions s
+                       WHERE s.settles_id = r.id), 0) AS settled
+       FROM transactions r
+      WHERE r.category = 'Uber' AND r.type = 'expense'
+        AND r.settles_id IS NULL
+        AND r.owed_amount IS NOT NULL AND r.owed_amount > 0
+        AND r.timestamp BETWEEN ? AND ?
+      ORDER BY r.timestamp DESC`,
+    [range.from, range.to],
+  );
+  return (res.rows ?? [])
+    .map(row => {
+      const owed = Number(row.owed_amount ?? 0);
+      const settled = Number(row.settled ?? 0);
+      return {
+        id: Number(row.id),
+        amount: Number(row.amount ?? 0),
+        timestamp: Number(row.timestamp ?? 0),
+        owedAmount: owed,
+        outstanding: Math.round((owed - settled) * 100) / 100,
+      };
+    })
+    .filter(r => r.outstanding > 0.005);
+}
+
+/**
+ * Link `id` as settling `settlesId` (or pass null to unlink). Used by the
+ * reimbursement matcher and by the undo path — every settlement is reversible,
+ * unlike the old flow which flipped a real ride to type='self' where the user
+ * could never find it again.
+ */
+export function setSettlement(id: number, settlesId: number | null): boolean {
+  return updateTransaction(id, { settles_id: settlesId });
+}
+
+/**
+ * Counterparties that have settled an Uber ride before — a strong signal that a
+ * new payment from the same person is another reimbursement.
+ */
+export function getKnownSettlementCounterparties(): string[] {
+  const conn = requireDb();
+  const res = conn.executeSync(
+    `SELECT DISTINCT s.counterparty
+       FROM transactions s
+       JOIN transactions ride ON ride.id = s.settles_id
+      WHERE ride.category = 'Uber' AND s.counterparty IS NOT NULL`,
+  );
+  return (res.rows ?? []).map(r => String(r.counterparty).toLowerCase());
 }
 
 /**
