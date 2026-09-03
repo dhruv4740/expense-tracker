@@ -164,7 +164,7 @@ Input: `(sender: string, body: string, ts?: number)`. Output: `ParsedTransaction
 - React Native **0.86.0**, React 19.2.3, **New Architecture ON** (`newArchEnabled=true`), Hermes ON.
 - Native modules use **legacy `ReactContextBaseJavaModule`** + `DeviceEventManagerModule.RCTDeviceEventEmitter` — supported under New Arch via the interop layer (no TurboModule codegen needed). Register via `ExpensePackage : ReactPackage` added in `MainApplication.kt`'s `PackageList(this).packages.apply { add(ExpensePackage()) }`.
 - App id / package: `com.expensetracker`.
-- Toolchain: Node 22, JDK 21, Android SDK at `C:/Users/hp/AppData/Local/Android/Sdk` (see `android/local.properties`, gitignored). `ANDROID_HOME` is unset in shell → call `adb`/`emulator` by full path.
+- Toolchain: Node 22, JDK 21, Android SDK (configured in `android/local.properties`, gitignored, or via `ANDROID_HOME`).
 
 ### Build variants — read this before shipping anything to the phone
 

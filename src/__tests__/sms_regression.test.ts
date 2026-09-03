@@ -98,7 +98,7 @@ describe('SMS regressions — categorization', () => {
 
   it('still categorizes a real UPI payment as UPI', () => {
     expect(
-      classify('Rs.320.00 debited from A/c XX5678 to rahul@okhdfcbank UPI Ref 4512')!
+      classify('Rs.320.00 debited from A/c XX5678 to friend@okhdfcbank UPI Ref 4512')!
         .category,
     ).toBe('UPI');
   });
@@ -117,9 +117,9 @@ describe('SMS regressions — counterparty and merchant extraction', () => {
 
   it('keeps a dotted VPA intact', () => {
     const r = classify(
-      'Rs.120.00 credited to A/c XX1234 from rahul.sharma@okhdfcbank on 12-Jul-26',
+      'Rs.120.00 credited to A/c XX1234 from friend.user@okhdfcbank on 12-Jul-26',
     )!;
-    expect(r.counterparty).toBe('rahul.sharma@okhdfcbank');
+    expect(r.counterparty).toBe('friend.user@okhdfcbank');
   });
 
   it('does not capture an instruction clause as a merchant', () => {
@@ -135,7 +135,7 @@ describe('SMS regressions — credit categorization', () => {
     // Every credit used to collapse to 'Income', which made the Uber screen's
     // `category !== 'Uber'` filter exclude nothing at all.
     expect(
-      classify('Rs.120.00 credited to A/c XX1234 from rahul.sharma@okhdfcbank on 12-Jul-26')!
+      classify('Rs.120.00 credited to A/c XX1234 from friend.user@okhdfcbank on 12-Jul-26')!
         .category,
     ).toBe('Friend Transfer');
   });
