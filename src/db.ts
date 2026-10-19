@@ -873,51 +873,6 @@ export function setSetting(key: string, value: string): void {
   );
 }
 
-// ─── Account balance (best-effort, last-known from SMS "Avl Bal") ─────────────
-
-const BALANCE_PREFIX = '__balance__';
-
-/** Returns the last-known balance (INR) for an account (keyed by last-4 digits or source). */
-export function getAccountBalance(accountKey: string): { balance: number; updatedAt: number } | null {
-  const raw = getSetting(`${BALANCE_PREFIX}${accountKey}`);
-  if (!raw) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(raw) as { balance: number; updatedAt: number };
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-/** Store the last-known balance for an account; only updates if newer than stored value. */
-export function setAccountBalance(accountKey: string, balance: number, ts: number): void {
-  const existing = getAccountBalance(accountKey);
-  if (existing && existing.updatedAt >= ts) {
-    return; // don't overwrite with older data
-  }
-  setSetting(`${BALANCE_PREFIX}${accountKey}`, JSON.stringify({ balance, updatedAt: ts }));
-}
-
-/** Return all stored balances as a flat array. */
-export function getAllAccountBalances(): { account: string; balance: number; updatedAt: number }[] {
-  const conn = requireDb();
-  const res = conn.executeSync(
-    `SELECT key, value FROM app_settings WHERE key LIKE '${BALANCE_PREFIX}%'`,
-    [],
-  );
-  return (res.rows ?? []).map(row => {
-    const key = String(row.key ?? '').slice(BALANCE_PREFIX.length);
-    try {
-      const val = JSON.parse(String(row.value ?? '{}')) as { balance: number; updatedAt: number };
-      return { account: key, balance: val.balance, updatedAt: val.updatedAt };
-    } catch {
-      return { account: key, balance: 0, updatedAt: 0 };
-    }
-  });
-}
-
 // ─── Recurring detection ──────────────────────────────────────────────────────
 
 export interface RecurringEntry {

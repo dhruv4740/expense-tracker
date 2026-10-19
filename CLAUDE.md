@@ -41,7 +41,7 @@ transactions(id, amount, merchant, source, raw_text, category, timestamp, type,
 - `dedup_key` = hash(source + amount + minute-bucket + raw_text); insert with `INSERT OR IGNORE` for idempotency (strict, always applies)
 - Soft cross-channel dedup (separate from dedup_key): drops an incoming row only when an existing row's channel is known and different from the incoming one — same-channel repeats are always kept
 - indices on timestamp, category, type; WAL mode
-- auxiliary tables: app_settings (key/value incl. per-account balances), merchant_rules (learned categorization), budgets
+- auxiliary tables: app_settings (key/value; legacy `__balance__*` rows are inert), merchant_rules (learned categorization), budgets
 categories: Food, Groceries, Transport, Uber, Shopping, Bills, Entertainment, Health, Investment, Education, UPI, Cash, Income, Friend Transfer, Loan/Dues, Other (auto-assign by keyword, editable; Uber checked before Transport, Investment/Education checked before Bills/UPI). Grouped for display (Essentials/Transport/Lifestyle/Education/Transfers/Investments/Income/Other) via `groupOf()` in categories.ts — display-only, no DB column. Investment is excluded from spend totals (tracked separately as `invested`).
 
 ## Permissions needed

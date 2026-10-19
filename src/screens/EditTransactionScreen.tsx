@@ -3,7 +3,7 @@
 // ADD (tx param absent) or EDIT (tx param present) a transaction.
 // After save/delete: emits DATA_CHANGED and navigation.goBack().
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   Alert,
   DeviceEventEmitter,
@@ -27,9 +27,6 @@ import {
   deleteTransaction,
   queryTransactions,
   upsertMerchantRule,
-  getAllAccountBalances,
-  getAccountBalance,
-  setAccountBalance,
   setSettlement,
 } from '../db';
 import type { TransactionRow, TransactionType } from '../db';
@@ -85,22 +82,6 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
   const [note, setNote] = useState(tx?.note ?? '');
   const [timestamp, setTimestamp] = useState(tx?.timestamp ?? Date.now());
   const [applyToAll, setApplyToAll] = useState(false);
-
-  // Account picker — new manual entries only (6e). Editing an existing row
-  // never retro-adjusts a balance, so there's nothing useful to pick here.
-  const [accounts, setAccounts] = useState<{ account: string; balance: number }[]>([]);
-  const [selectedAccount, setSelectedAccount] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (isEdit) {
-      return;
-    }
-    const balances = getAllAccountBalances();
-    setAccounts(balances);
-    if (balances.length === 1) {
-      setSelectedAccount(balances[0].account);
-    }
-  }, [isEdit]);
 
   // Keyboard-safe scrolling (6a): the Note field can sit near the bottom of
   // the form and nothing lifted the screen above the keyboard, so the user
@@ -238,18 +219,6 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
         raw_text: null,
       });
 
-      // Smart deduction: only for a NEW manual entry against a picked
-      // account. Uses Date.now() (not the transaction's own date) as the
-      // balance timestamp so it always wins over an older SMS-derived
-      // balance per setAccountBalance's newer-wins guard. Self-transfers
-      // don't move a single account's balance either direction.
-      if (selectedAccount && (type === 'expense' || type === 'income')) {
-        const current = getAccountBalance(selectedAccount);
-        if (current) {
-          const delta = type === 'expense' ? -amountNum : amountNum;
-          setAccountBalance(selectedAccount, current.balance + delta, Date.now());
-        }
-      }
     }
 
     DeviceEventEmitter.emit(DATA_CHANGED);
@@ -264,7 +233,6 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
     isEdit,
     tx,
     applyToAll,
-    selectedAccount,
     navigation,
   ]);
 
@@ -446,31 +414,6 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
         />
       </View>
 
-      {/* Account (new manual entries only) — deducts/adds the amount from
-          the picked account's last-known balance on save (6e). */}
-      {!isEdit && accounts.length > 0 && (type === 'expense' || type === 'income') && (
-        <>
-          <SectionHeader title="Account (optional)" />
-          <View style={[styles.card, styles.catCard]}>
-            <TouchableOpacity
-              onPress={() => setSelectedAccount(null)}
-              style={[styles.acctChip, selectedAccount === null ? styles.acctChipActive : undefined]}
-            >
-              <Text style={styles.acctChipText}>None</Text>
-            </TouchableOpacity>
-            {accounts.map(a => (
-              <TouchableOpacity
-                key={a.account}
-                onPress={() => setSelectedAccount(a.account)}
-                style={[styles.acctChip, selectedAccount === a.account ? styles.acctChipActive : undefined]}
-              >
-                <Text style={styles.acctChipText}>{a.account}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </>
-      )}
-
       {/* Apply category to all matching (edit only, category changed) */}
       {isEdit && (
         <View style={[styles.card, styles.toggleRow]}>
@@ -574,22 +517,6 @@ const styles = StyleSheet.create({
   },
   catChipActive: {
     opacity: 1,
-  },
-  acctChip: {
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.xs,
-    borderRadius: theme.radius.pill,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surfaceAlt,
-  },
-  acctChipActive: {
-    borderColor: theme.colors.accent,
-    backgroundColor: theme.colors.accent + '22',
-  },
-  acctChipText: {
-    fontSize: theme.font.size.xs,
-    color: theme.colors.textSecondary,
   },
   textInput: {
     fontSize: theme.font.size.md,

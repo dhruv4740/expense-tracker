@@ -134,8 +134,8 @@ Input: `(sender: string, body: string, ts?: number)`. Output: `ParsedTransaction
   CREATE INDEX IF NOT EXISTS idx_tx_timestamp ON transactions(timestamp);
   CREATE INDEX IF NOT EXISTS idx_tx_category ON transactions(category);
   CREATE INDEX IF NOT EXISTS idx_tx_type ON transactions(type);
-  -- v2 auxiliary tables: app_settings (key/value; also stores per-account balances under
-  -- '__balance__' + key), merchant_rules (learned categorization), budgets.
+  -- v2 auxiliary tables: app_settings (key/value; legacy '__balance__*' rows are inert, the balance feature was removed),
+  -- merchant_rules (learned categorization), budgets.
   ```
 - **Strict idempotency:** `dedup_key = hash(source + amount + floor(ts/60000) + raw_text)`; insert with `INSERT OR IGNORE`. Prevents live-emit + buffer-drain double counts of the exact same message. Unaffected by the soft-dedup rule below — always applies.
 - **Soft cross-channel dedup** (user-chosen policy — see §8 for why "cross-channel only"): the same payment can arrive via SMS *and* a bank-app notification with different raw text (different strict key). An incoming row is dropped only when an *existing* row has a **known, different** channel (same-channel repeats are always kept), amount matches, timestamps are within 2 minutes, and counterparties agree or are unknown. Every pre-v3 row has `channel = NULL` and is exempt — NULL never triggers a drop. Manual entries (`channel = 'manual'`) never soft-dedup. Restore (`export.ts`) bypasses soft dedup entirely (`skipSoftDedup: true`) so it can't merge two genuine close-together payments; the strict key still keeps a restore idempotent.

@@ -8,12 +8,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   DeviceEventEmitter,
-  Modal,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -27,9 +25,7 @@ import {
   getTopMerchants,
   hasCategoryRows,
   queryTransactions,
-  getAllAccountBalances,
   getUncategorizedCount,
-  setAccountBalance,
 } from '../db';
 import type { Summary, TransactionRow, UberSummary } from '../db';
 import { CATEGORY_META, CATEGORIES } from '../categories';
@@ -57,7 +53,6 @@ interface DashboardData {
   topMerchant: { merchant: string; total: number; count: number } | null;
   biggestExpense: TransactionRow | null;
   budgetStatus: BudgetStatus;
-  balances: { account: string; balance: number; updatedAt: number }[];
   monthLabel: string;
   uncategorizedCount: number;
   /** This-month Uber spend net of reimbursements — same figure the Uber
@@ -86,7 +81,6 @@ function loadData(): DashboardData {
       : null;
 
   const budgetStatus = computeBudgetStatus();
-  const balances = getAllAccountBalances();
   const uncategorizedCount = getUncategorizedCount();
 
   const uberSummary = getUberSummary(range);
@@ -100,7 +94,6 @@ function loadData(): DashboardData {
     topMerchant,
     biggestExpense,
     budgetStatus,
-    balances,
     monthLabel,
     uncategorizedCount,
     uberSummary,
@@ -129,10 +122,6 @@ export default function DashboardScreen() {
       return next;
     });
   }, []);
-
-  // Editable balances (6e) — tap a balance row to correct it by hand.
-  const [editingAccount, setEditingAccount] = useState<string | null>(null);
-  const [editingValue, setEditingValue] = useState('');
 
   const reload = useCallback(() => {
     setData(loadData());
@@ -165,7 +154,6 @@ export default function DashboardScreen() {
     topMerchant,
     biggestExpense,
     budgetStatus,
-    balances,
     monthLabel,
     uncategorizedCount,
     uberSummary,
@@ -467,43 +455,6 @@ export default function DashboardScreen() {
         </>
       )}
 
-      {/* ── Account balances (last-known from SMS) ── */}
-      {balances.length > 0 && (
-        <>
-          <SectionHeader title="Last Known Balances" />
-          <Card>
-            {balances.map(b => (
-              <TouchableOpacity
-                key={b.account}
-                style={styles.balanceRow}
-                onPress={() => {
-                  setEditingAccount(b.account);
-                  setEditingValue(String(b.balance));
-                }}
-                activeOpacity={0.6}
-              >
-                <Text style={styles.balanceAccount}>
-                  {b.account.length <= 4 ? `A/c ••••${b.account}` : b.account}
-                </Text>
-                <View style={styles.balanceRight}>
-                  <Text style={styles.balanceAmt}>
-                    ₹{b.balance.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                  </Text>
-                  <Text style={styles.balanceSub}>
-                    {new Date(b.updatedAt).toLocaleDateString('en-IN', {
-                      day: 'numeric', month: 'short',
-                    })}
-                  </Text>
-                </View>
-              </TouchableOpacity>
-            ))}
-            <Text style={styles.balanceDisclaimer}>
-              Best-effort · from SMS "Avl Bal" · not real-time
-            </Text>
-          </Card>
-        </>
-      )}
-
       {/* ── Quick insights ── */}
       <SectionHeader title="Quick Insights" />
       <Card>
@@ -542,51 +493,6 @@ export default function DashboardScreen() {
 
       <View style={styles.bottomPad} />
 
-      {/* Edit-balance modal (6e) */}
-      <Modal
-        visible={editingAccount != null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setEditingAccount(null)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>
-              Edit balance{editingAccount ? ` — ${editingAccount}` : ''}
-            </Text>
-            <TextInput
-              style={styles.modalInput}
-              value={editingValue}
-              onChangeText={setEditingValue}
-              keyboardType="decimal-pad"
-              placeholder="0.00"
-              placeholderTextColor={theme.colors.textMuted}
-              autoFocus
-            />
-            <View style={styles.modalActions}>
-              <TouchableOpacity
-                style={styles.modalBtn}
-                onPress={() => setEditingAccount(null)}
-              >
-                <Text style={styles.modalBtnText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalBtn, styles.modalBtnPrimary]}
-                onPress={() => {
-                  const value = parseFloat(editingValue);
-                  if (editingAccount && !isNaN(value)) {
-                    setAccountBalance(editingAccount, value, Date.now());
-                    reload();
-                  }
-                  setEditingAccount(null);
-                }}
-              >
-                <Text style={[styles.modalBtnText, styles.modalBtnTextPrimary]}>Save</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </ScrollView>
   );
 }
@@ -760,64 +666,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontStyle: 'italic',
   },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: theme.spacing.lg,
-  },
-  modalCard: {
-    width: '100%',
-    maxWidth: 360,
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.radius.md,
-    padding: theme.spacing.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
-  },
-  modalTitle: {
-    fontSize: theme.font.size.md,
-    color: theme.colors.textPrimary,
-    fontWeight: theme.font.weight.semibold,
-    marginBottom: theme.spacing.md,
-  },
-  modalInput: {
-    fontSize: theme.font.size.xl,
-    color: theme.colors.textPrimary,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.radius.sm,
-    padding: theme.spacing.md,
-    textAlign: 'center',
-  },
-  modalActions: {
-    flexDirection: 'row',
-    gap: theme.spacing.sm,
-    marginTop: theme.spacing.lg,
-  },
-  modalBtn: {
-    flex: 1,
-    paddingVertical: theme.spacing.md,
-    borderRadius: theme.radius.sm,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surfaceAlt,
-  },
-  modalBtnPrimary: {
-    borderColor: theme.colors.accent,
-    backgroundColor: theme.colors.accent,
-  },
-  modalBtnText: {
-    fontSize: theme.font.size.sm,
-    color: theme.colors.textSecondary,
-    fontWeight: theme.font.weight.medium,
-  },
-  modalBtnTextPrimary: {
-    color: '#000',
-    fontWeight: theme.font.weight.bold,
-  },
   warningBanner: {
     marginHorizontal: theme.spacing.lg,
     marginTop: theme.spacing.sm,
@@ -879,39 +727,6 @@ const styles = StyleSheet.create({
   insightSub: {
     fontSize: theme.font.size.xs,
     color: theme.colors.textMuted,
-  },
-  balanceRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: theme.spacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.colors.border,
-  },
-  balanceAccount: {
-    fontSize: theme.font.size.sm,
-    color: theme.colors.textSecondary,
-    fontWeight: theme.font.weight.medium,
-  },
-  balanceRight: {
-    alignItems: 'flex-end',
-    gap: 2,
-  },
-  balanceAmt: {
-    fontSize: theme.font.size.md,
-    color: theme.colors.credit,
-    fontWeight: theme.font.weight.semibold,
-  },
-  balanceSub: {
-    fontSize: theme.font.size.xs,
-    color: theme.colors.textMuted,
-  },
-  balanceDisclaimer: {
-    fontSize: 9,
-    color: theme.colors.textMuted,
-    marginTop: theme.spacing.sm,
-    textAlign: 'center',
-    fontStyle: 'italic',
   },
   bottomPad: {
     height: theme.spacing.xxl,
