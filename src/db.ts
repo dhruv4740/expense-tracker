@@ -516,6 +516,26 @@ export function queryTransactions(
 // ─── aggregation (in SQL — never .map over all rows) ──────────────────────────
 
 /**
+ * Pair-to-cancel netting. A row linked via settles_id to an OPPOSITE-direction
+ * parent (an income that repays an expense, or an expense that returns an
+ * income) reduces that parent: effective = MAX(amount - paid, 0). The settling
+ * rows themselves stay excluded from every total. Same-direction links (the
+ * Uber "repayment" mode) exclude the child but do not reduce the parent.
+ * Joined as `t` (parent) / `k` (paid-back totals). The math is mirrored in
+ * src/netting.ts, which is what the unit tests exercise.
+ */
+const NETTING_JOIN = `LEFT JOIN (
+        SELECT c.settles_id AS pid, SUM(c.amount) AS paid, COUNT(*) AS n
+          FROM transactions c
+          JOIN transactions p ON p.id = c.settles_id
+         WHERE c.type IN ('expense', 'income')
+           AND p.type IN ('expense', 'income')
+           AND c.type != p.type
+         GROUP BY c.settles_id
+      ) k ON k.pid = t.id`;
+const EFFECTIVE_AMOUNT = 'MAX(t.amount - COALESCE(k.paid, 0), 0)';
+
+/**
  * Spent (expense) / received (income) / net + per-category and per-day spend
  * for a range. Self-transfers are excluded from every figure.
  */
@@ -530,18 +550,19 @@ export function getSummary(range: Range): Summary {
   // categories, which are reported separately as `transferred`.
   const totalsRes = conn.executeSync(
     `SELECT
-        COALESCE(SUM(CASE WHEN type = 'income'
-                           AND settles_id IS NULL
-                           AND category NOT IN (${NON_SPEND_PLACEHOLDERS})
-                          THEN amount END), 0) AS received,
-        COALESCE(SUM(CASE WHEN type = 'expense' AND category = ?
-                          THEN amount END), 0) AS invested,
-        COALESCE(SUM(CASE WHEN category IN (${TRANSFER_CATEGORIES.map(() => '?').join(', ')})
-                           AND type IN ('expense', 'income')
-                          THEN CASE WHEN type = 'expense' THEN amount ELSE -amount END
+        COALESCE(SUM(CASE WHEN t.type = 'income'
+                           AND t.settles_id IS NULL
+                           AND t.category NOT IN (${NON_SPEND_PLACEHOLDERS})
+                          THEN ${EFFECTIVE_AMOUNT} END), 0) AS received,
+        COALESCE(SUM(CASE WHEN t.type = 'expense' AND t.category = ?
+                          THEN t.amount END), 0) AS invested,
+        COALESCE(SUM(CASE WHEN t.category IN (${TRANSFER_CATEGORIES.map(() => '?').join(', ')})
+                           AND t.type IN ('expense', 'income')
+                          THEN CASE WHEN t.type = 'expense' THEN t.amount ELSE -t.amount END
                      END), 0) AS transferred
-       FROM transactions
-      WHERE timestamp BETWEEN ? AND ?`,
+       FROM transactions t
+       ${NETTING_JOIN}
+      WHERE t.timestamp BETWEEN ? AND ?`,
     [
       ...NON_SPEND_CATEGORIES,
       INVESTMENT_CATEGORY,
@@ -561,16 +582,17 @@ export function getSummary(range: Range): Summary {
   // Investment is excluded here (and from spent/byDay) so SIPs/mutual funds
   // don't count as "spending" — see the separate `invested` total above.
   const catRes = conn.executeSync(
-    `SELECT category,
-            SUM(CASE WHEN type = 'expense' THEN amount
-                     WHEN type = 'income'  THEN -amount
+    `SELECT t.category AS category,
+            SUM(CASE WHEN t.type = 'expense' THEN ${EFFECTIVE_AMOUNT}
+                     WHEN t.type = 'income'  THEN -${EFFECTIVE_AMOUNT}
                      ELSE 0 END) AS total
-       FROM transactions
-      WHERE type IN ('expense', 'income')
-        AND settles_id IS NULL
-        AND category NOT IN (${NON_SPEND_PLACEHOLDERS})
-        AND timestamp BETWEEN ? AND ?
-      GROUP BY category
+       FROM transactions t
+       ${NETTING_JOIN}
+      WHERE t.type IN ('expense', 'income')
+        AND t.settles_id IS NULL
+        AND t.category NOT IN (${NON_SPEND_PLACEHOLDERS})
+        AND t.timestamp BETWEEN ? AND ?
+      GROUP BY t.category
       ORDER BY total DESC`,
     [...NON_SPEND_CATEGORIES, from, to],
   );
@@ -600,12 +622,14 @@ export function getSummary(range: Range): Summary {
   // with localDayIndexToDate() when rendering labels.
   const tzOffsetMs = localTzOffsetMs();
   const dayRes = conn.executeSync(
-    `SELECT CAST((timestamp + ?) / 86400000 AS INTEGER) AS day, SUM(amount) AS total
-       FROM transactions
-      WHERE type = 'expense'
-        AND settles_id IS NULL
-        AND category NOT IN (${NON_SPEND_PLACEHOLDERS})
-        AND timestamp BETWEEN ? AND ?
+    `SELECT CAST((t.timestamp + ?) / 86400000 AS INTEGER) AS day,
+            SUM(${EFFECTIVE_AMOUNT}) AS total
+       FROM transactions t
+       ${NETTING_JOIN}
+      WHERE t.type = 'expense'
+        AND t.settles_id IS NULL
+        AND t.category NOT IN (${NON_SPEND_PLACEHOLDERS})
+        AND t.timestamp BETWEEN ? AND ?
       GROUP BY day
       ORDER BY day ASC`,
     [tzOffsetMs, ...NON_SPEND_CATEGORIES, from, to],
@@ -637,13 +661,11 @@ export function getUberSummary(range: Range): UberSummary {
   const { from, to } = range;
 
   // Rides = Uber-category expenses that are NOT themselves settling something.
-  // Reimbursements come from two places:
-  //   1. rows explicitly linked via settles_id to a ride in range (any
-  //      category — a friend's payback usually lands in Friend Transfer/UPI,
-  //      not Uber, which is exactly why category-only netting missed it); and
-  //   2. legacy: income hand-tagged 'Uber' with no link, which is how every
-  //      pre-v4 reimbursement is recorded. Kept so existing history keeps
-  //      netting exactly as it did before the migration.
+  // Reimbursed uses the same pair-to-cancel rule as getSummary (so the Uber card
+  // and the Dashboard donut always agree): per ride, the income rows linked via
+  // settles_id, capped at the ride's amount; plus legacy income hand-tagged
+  // 'Uber' with no link (every pre-v4 reimbursement), net of anything that
+  // itself cancels it. Same-direction links never reduce a ride.
   const totalsRes = conn.executeSync(
     `SELECT
         COALESCE(SUM(CASE WHEN type = 'expense' THEN amount END), 0) AS spent,
@@ -655,19 +677,22 @@ export function getUberSummary(range: Range): UberSummary {
   );
 
   const reimbRes = conn.executeSync(
-    `SELECT COALESCE(SUM(amount), 0) AS reimbursed, COUNT(*) AS reimbursementCount
+    `SELECT COALESCE(SUM(amount), 0) AS reimbursed, COALESCE(SUM(n), 0) AS reimbursementCount
        FROM (
-         SELECT s.amount AS amount
-           FROM transactions s
-           JOIN transactions ride ON ride.id = s.settles_id
-          WHERE ride.category = 'Uber'
-            AND ride.type = 'expense'
-            AND ride.timestamp BETWEEN ? AND ?
+         SELECT MIN(k.paid, t.amount) AS amount, k.n AS n
+           FROM transactions t
+           ${NETTING_JOIN}
+          WHERE t.category = 'Uber' AND t.type = 'expense'
+            AND t.settles_id IS NULL
+            AND k.pid IS NOT NULL
+            AND t.timestamp BETWEEN ? AND ?
          UNION ALL
-         SELECT amount
-           FROM transactions
-          WHERE category = 'Uber' AND type = 'income'
-            AND settles_id IS NULL AND timestamp BETWEEN ? AND ?
+         SELECT ${EFFECTIVE_AMOUNT} AS amount,
+                CASE WHEN ${EFFECTIVE_AMOUNT} > 0 THEN 1 ELSE 0 END AS n
+           FROM transactions t
+           ${NETTING_JOIN}
+          WHERE t.category = 'Uber' AND t.type = 'income'
+            AND t.settles_id IS NULL AND t.timestamp BETWEEN ? AND ?
        )`,
     [from, to, from, to],
   );
@@ -703,7 +728,7 @@ export function getUnsettledRides(range: Range): UnsettledRide[] {
   const res = conn.executeSync(
     `SELECT r.id, r.amount, r.timestamp, r.owed_amount,
             COALESCE((SELECT SUM(s.amount) FROM transactions s
-                       WHERE s.settles_id = r.id), 0) AS settled
+                       WHERE s.settles_id = r.id AND s.type = 'income'), 0) AS settled
        FROM transactions r
       WHERE r.category = 'Uber' AND r.type = 'expense'
         AND r.settles_id IS NULL
