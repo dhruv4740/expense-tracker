@@ -386,8 +386,8 @@ describe('suggestSettlements', () => {
 
 // ─── generic pair-to-cancel ───────────────────────────────────────────────────
 
-import { suggestPairs, PAIR_CUTOFF } from '../settle';
-import type { PairParent, CandidateTx as PairCandidate } from '../settle';
+import { suggestPairs, scorePair, isBannerWorthy, pickRepaymentBanner, pairKey, PAIR_CUTOFF } from '../settle';
+import type { PairParent, CandidateTx as PairCandidate, BannerRow } from '../settle';
 
 describe('suggestPairs', () => {
   const DAY = 86_400_000;
@@ -398,7 +398,7 @@ describe('suggestPairs', () => {
   });
 
   it('an exact opposite-direction match outranks a partial one', () => {
-    const r = suggestPairs(parent, [cand({ id: 11, amount: 200 }), cand({ id: 12 })]);
+    const r = suggestPairs(parent, [cand({ id: 11, amount: 130 }), cand({ id: 12 })]);
     expect(r.map(x => x.candidate.id)).toEqual([12, 11]);
     expect(r[0].score).toBeGreaterThan(r[1].score);
   });
@@ -417,24 +417,97 @@ describe('suggestPairs', () => {
     ['itself', { id: 1 }],
     ['larger than the remainder', { amount: 800 }],
     ['before the parent', { timestamp: parent.timestamp - 2 * DAY }],
-    ['over 30 days later', { timestamp: parent.timestamp + 40 * DAY }],
   ])('rejects %s', (_n, over) => {
     expect(suggestPairs(parent, [cand(over)])).toEqual([]);
   });
 
+  it('has no time limit: a payback months later is still listed, ranked lower', () => {
+    const r = suggestPairs(parent, [
+      cand({ id: 30, timestamp: parent.timestamp + 90 * DAY }),
+      cand({ id: 31, timestamp: parent.timestamp + 2 * DAY }),
+    ]);
+    expect(r.map(x => x.candidate.id)).toEqual([31, 30]);
+    expect(r[1].reason).toMatch(/90 days later/);
+  });
+
+  it('recognises 1/2, 1/3 and 1/4 shares', () => {
+    for (const a of [250, 166.67, 125]) {
+      expect(suggestPairs(parent, [cand({ amount: a })])[0].reason).toMatch(/Equal share/);
+    }
+  });
+
   it('measures against what is left after earlier payments', () => {
     const half = { ...parent, alreadyPaid: 300 };
-    expect(suggestPairs(half, [cand({ amount: 200 })])[0].reason).toMatch(/exactly/);
+    expect(suggestPairs(half, [cand({ amount: 200 })])[0].reason).toMatch(/Same amount/);
     expect(suggestPairs(half, [cand({ amount: 500 })])).toEqual([]);
   });
 
-  it('same person boosts the score; limit and cutoff apply', () => {
-    const base = suggestPairs(parent, [cand({})])[0].score;
+  it('same person boosts the score, different person is labelled honestly', () => {
+    const diff = suggestPairs(parent, [cand({ counterparty: 'arun@okicici' })])[0];
     const same = suggestPairs(parent, [cand({ counterparty: 'anita@okaxis' })])[0];
-    expect(same.score).toBeGreaterThan(base);
+    expect(same.score).toBeGreaterThan(diff.score);
     expect(same.reason).toMatch(/same person/);
+    expect(diff.reason).toBe('Same amount · 1 day later · different person');
+  });
+
+  it('salary/interest/refund wording is penalised', () => {
+    const plain = scorePair(parent, cand({}));
+    const sal = scorePair(parent, cand({ raw_text: 'Salary credited' }));
+    expect(sal.score).toBeLessThan(plain.score);
+    expect(sal.penalized).toBe(true);
+  });
+
+  it('limit applies', () => {
     const many = Array.from({ length: 8 }, (_, i) => cand({ id: 20 + i }));
     expect(suggestPairs(parent, many)).toHaveLength(5);
     expect(PAIR_CUTOFF).toBeGreaterThan(0);
+  });
+});
+
+describe('repayment banner (proactive, strict)', () => {
+  const DAY = 86_400_000;
+  const T = 1_700_000_000_000;
+  const row = (over: Partial<BannerRow>): BannerRow => ({
+    id: 1, type: 'expense', amount: 100, category: 'Friend Transfer',
+    timestamp: T, counterparty: 'p1@upi', ...over,
+  });
+
+  it('₹100 paid, unrelated ₹100 from a different person 10 days later → no banner', () => {
+    const rows = [row({}), row({ id: 2, type: 'income', timestamp: T + 10 * DAY, counterparty: 'p2@upi' })];
+    expect(pickRepaymentBanner(rows, {}, new Set())).toBeNull();
+    // ...but it is still findable on demand, labelled honestly.
+    const r = suggestPairs({ ...rows[0], type: 'expense' }, [rows[1]]);
+    expect(r).toHaveLength(1);
+    expect(r[0].reason).toMatch(/different person/);
+  });
+
+  it('same amount within 3 days → banner', () => {
+    const rows = [row({}), row({ id: 2, type: 'income', timestamp: T + 2 * DAY, counterparty: 'p2@upi' })];
+    const b = pickRepaymentBanner(rows, {}, new Set());
+    expect(b?.parent.id).toBe(1);
+    expect(b?.candidate.id).toBe(2);
+  });
+
+  it('same person, equal amount, 20 days later → banner; known person too', () => {
+    const same = [row({}), row({ id: 2, type: 'income', timestamp: T + 20 * DAY, counterparty: 'p1@upi' })];
+    expect(pickRepaymentBanner(same, {}, new Set())).not.toBeNull();
+    const known = [row({}), row({ id: 2, type: 'income', timestamp: T + 20 * DAY, counterparty: 'p2@upi' })];
+    expect(pickRepaymentBanner(known, {}, new Set())).toBeNull();
+    expect(pickRepaymentBanner(known, { knownCounterparties: ['p2@upi'] }, new Set())).not.toBeNull();
+  });
+
+  it('dismissed pairs are not offered again; salary-like text never qualifies', () => {
+    const rows = [row({}), row({ id: 2, type: 'income', timestamp: T + DAY, counterparty: 'p2@upi' })];
+    expect(pickRepaymentBanner(rows, {}, new Set([pairKey(1, 2)]))).toBeNull();
+    const sal = [row({}), row({ id: 2, type: 'income', timestamp: T + DAY, raw_text: 'cashback credited' })];
+    expect(pickRepaymentBanner(sal, {}, new Set())).toBeNull();
+  });
+
+  it('a partial amount is never banner-worthy', () => {
+    const s = scorePair(
+      { id: 1, type: 'expense', amount: 500, timestamp: T },
+      { id: 2, type: 'income', amount: 130, category: 'x', timestamp: T + DAY },
+    );
+    expect(isBannerWorthy(s)).toBe(false);
   });
 });

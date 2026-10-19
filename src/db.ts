@@ -820,8 +820,8 @@ export function getSettlementLinks(id: number): {
 /**
  * Candidate rows that could cancel `parent`: opposite direction, unlinked, not
  * self/Investment, not themselves a parent of something, and within the
- * settle.ts window (12h before to 30 days after). Scoring happens in
- * settle.suggestPairs; this only narrows the set in SQL.
+ * no earlier than 12h before it (no upper time limit — recency only ranks).
+ * Scoring happens in settle.suggestPairs; this only narrows the set in SQL.
  */
 export function getPairCandidates(parent: {
   id: number;
@@ -834,15 +834,14 @@ export function getPairCandidates(parent: {
       WHERE c.type = ? AND c.id != ?
         AND c.settles_id IS NULL
         AND c.category != 'Investment'
-        AND c.timestamp BETWEEN ? AND ?
+        AND c.timestamp >= ?
         AND NOT EXISTS (SELECT 1 FROM transactions x WHERE x.settles_id = c.id)
       ORDER BY c.timestamp ASC
-      LIMIT 300`,
+      LIMIT 2000`,
     [
       parent.type === 'expense' ? 'income' : 'expense',
       parent.id,
       parent.timestamp - 12 * 3600_000,
-      parent.timestamp + 30 * 86_400_000,
     ],
   );
   return (res.rows ?? []).map(mapRow);

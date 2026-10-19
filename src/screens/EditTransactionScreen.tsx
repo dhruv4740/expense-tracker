@@ -31,6 +31,7 @@ import {
   setSettlement,
   getSettlementLinks,
   getPairCandidates,
+  getKnownSettlementCounterparties,
 } from '../db';
 import type { TransactionRow, TransactionType } from '../db';
 import { GROUPED_CATEGORIES } from '../categories';
@@ -98,6 +99,7 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
   // Pair-to-cancel links: rows that settle this one, or the row this one settles.
   const [linkTick, setLinkTick] = useState(0);
   const [showPairs, setShowPairs] = useState(false);
+  const [pairSearch, setPairSearch] = useState('');
   const links = useMemo(
     () =>
       isEdit && tx?.id != null
@@ -116,6 +118,16 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
       return [];
     }
     const t = tx.type as 'expense' | 'income';
+    const q = pairSearch.trim().toLowerCase();
+    let candidates = getPairCandidates({ id: tx.id, type: t, timestamp: tx.timestamp });
+    if (q) {
+      // Search by amount ("500", "1,200") or by name/VPA/merchant.
+      candidates = candidates.filter(
+        c =>
+          String(c.amount).includes(q.replace(/,/g, '')) ||
+          `${c.counterparty ?? ''} ${c.merchant ?? ''}`.toLowerCase().includes(q),
+      );
+    }
     return suggestPairs(
       {
         id: tx.id,
@@ -126,9 +138,11 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
         merchant: tx.merchant,
         alreadyPaid: paidSoFar,
       },
-      getPairCandidates({ id: tx.id, type: t, timestamp: tx.timestamp }),
+      candidates,
+      { knownCounterparties: getKnownSettlementCounterparties() },
+      q ? 10 : 5,
     );
-  }, [showPairs, pairable, tx, paidSoFar]);
+  }, [showPairs, pairable, tx, paidSoFar, pairSearch]);
 
   function linkPair(childId: number | undefined) {
     if (childId == null || tx?.id == null) {
@@ -137,6 +151,7 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
     setSettlement(childId, tx.id);
     DeviceEventEmitter.emit(DATA_CHANGED);
     setShowPairs(false);
+    setPairSearch('');
     setLinkTick(n => n + 1);
   }
 
@@ -500,9 +515,17 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
         <View style={styles.pairOverlay}>
           <View style={styles.pairSheet}>
             <Text style={styles.pairTitle}>Cancel out with…</Text>
+            <TextInput
+              style={styles.pairSearch}
+              value={pairSearch}
+              onChangeText={setPairSearch}
+              placeholder="Search by amount or name"
+              placeholderTextColor={theme.colors.textMuted}
+              autoCorrect={false}
+            />
             {pairSuggestions.length === 0 ? (
               <Text style={styles.settlementText}>
-                No matching {tx?.type === 'income' ? 'debit' : 'credit'} found within 30 days.
+                No matching {tx?.type === 'income' ? 'debit' : 'credit'} found{pairSearch.trim() ? ' for that search' : ''}.
               </Text>
             ) : (
               pairSuggestions.map(sug => (
@@ -521,7 +544,7 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
                 </TouchableOpacity>
               ))
             )}
-            <TouchableOpacity style={styles.unlinkBtn} onPress={() => setShowPairs(false)}>
+            <TouchableOpacity style={styles.unlinkBtn} onPress={() => { setShowPairs(false); setPairSearch(''); }}>
               <Text style={styles.unlinkText}>Close</Text>
             </TouchableOpacity>
           </View>
@@ -690,6 +713,15 @@ const styles = StyleSheet.create({
     borderTopRightRadius: theme.radius.lg,
     padding: theme.spacing.lg,
     paddingBottom: 40,
+  },
+  pairSearch: {
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 10,
+    color: theme.colors.textPrimary,
   },
   pairTitle: {
     fontSize: theme.font.size.lg,
