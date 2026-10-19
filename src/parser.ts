@@ -46,7 +46,19 @@ export interface ParsedTransaction {
   timestamp: number;
   /** Unmodified original message body. */
   raw_text: string;
+  /**
+   * Set when the message is not ordinary spend/income: a credit-card bill
+   * settlement, a top-up of the user's own wallet, a move between the user's
+   * own accounts, or an investment (IPO allotment). Consumed by classify.ts.
+   */
+  kind?: TransactionKind;
 }
+
+export type TransactionKind =
+  | 'card_bill'
+  | 'wallet_load'
+  | 'own_transfer'
+  | 'investment';
 
 // ─── Compiled regexes ─────────────────────────────────────────────────────────
 
@@ -68,18 +80,46 @@ const AMOUNT_MULTIPLIERS: Record<string, number> = {
 /**
  * Messages that contain an amount but are NOT a real settled transaction:
  * future-dated autopay/mandate notices, promo terms, failed/declined
- * payments, OTP prompts, and money-request notices. Matching any of these
+ * payments, OTP prompts, money-request notices, IPO bid/mandate traffic, and
+ * AMC confirmations that duplicate a bank debit. Matching any of these
  * short-circuits parsing entirely (returns null).
  */
-const NEGATIVE_GUARD_RE =
-  /will be (?:debited|credited)|could not|failed|declined|unsuccessful|reversed request|\botp\b|e-?mandate|autopay.*(?:set|registered)|requested money|has requested/i;
+const NEGATIVE_GUARDS: RegExp[] = [
+  // Future-dated / promo
+  /will be (?:auto[- ]?)?(?:debited|deducted|credited)/i,
+  /could not|failed|declined|unsuccessful|reversed request/i,
+  /\botp\b|e-?mandate|autopay.*(?:set|registered)/i,
+  /requested money|has requested/i,
+  // IPO bidding, blocking and allotment traffic (the bank debit is the
+  // only message that is a real movement of money)
+  /UPI-IPO/i,
+  /\bIPO\b/i,
+  /unbl(?:oc)?k/i,
+  /submitted on BSE/i,
+  /allot(?:ted|ment)/i,
+  /blocked in your account/i,
+  /\bCDSL\b/i,
+  // AMC confirmations that duplicate the bank debit
+  /SIP Purchase[\s\S]*processed/i,
+  /purchase request dated[\s\S]*processed/i,
+  // Kotak "twin" confirmation of an already-reported transaction
+  /Your transaction for INR [\d,.]+ against txn ID \S+ has been processed successfully/i,
+  /UPI LITE Top-?up/i,
+  // Mandate setup (NOT a bare "UPI Mandate": that prefix is a real debit)
+  /mandate[\s\S]*successfully created/i,
+  /collect request/i,
+  /Mandate reference no[\s\S]*issued/i,
+  // Merchant receipts / dues
+  /we received Rs\.?\s*[\d,.]+ for invoice/i,
+  /pending amount is/i,
+];
 
 /** Refund/reversal keywords — used to override direction even when "debited" also appears. */
 const REFUND_RE = /\b(refund|reversed|reversal)\b/i;
 
 /** Expense direction keywords. */
 const EXPENSE_RE =
-  /\b(debited|spent|charged|sent|paid|purchase|withdrawn|w\/d)\b/i;
+  /\b(debited|deducted|spent|charged|sent|paid|purchase|withdrawn|w\/d)\b/i;
 
 /** Income direction keywords. */
 const INCOME_RE = /\b(credited|received|refund)\b/i;
@@ -95,7 +135,10 @@ const INCOME_RE = /\b(credited|received|refund)\b/i;
 // separately below) — excluding it truncated every dotted VPA and abbreviated
 // name: "john.doe@okhdfcbank" -> "john", "Dr. Mehta Clinic" -> "Dr".
 const MERCHANT_RE_EXPENSE = /\b(?:at|to|towards)\s+(?!your\b)([^,;:!\n]+)/gi;
-const MERCHANT_RE_INCOME = /\b(?:at|to|towards|from)\s+(?!your\b)([^,;:!\n]+)/gi;
+// Income never takes a "to ..." candidate: "credited to HDFC Bank A/c ..." is the
+// user's own account. "from" is preferred; "towards"/"at" are the fallback.
+const MERCHANT_RE_INCOME_FROM = /\bfrom\s+(?!your\b)([^,;:!\n]+)/gi;
+const MERCHANT_RE_INCOME_OTHER = /\b(?:at|towards)\s+(?!your\b)([^,;:!\n]+)/gi;
 
 /**
  * Clauses where "to"/"at" introduces an instruction, not a payee. Without this
@@ -159,6 +202,107 @@ const MERCHANT_NOISE_RE =
 const BALANCE_RE =
   /(?:avl\.?\s*bal(?:ance)?|available\s+balance|\bbal\b)\s*[:\s]*(?:rs\.?|₹|inr)?\s*([\d,]+(?:\.\d{1,2})?)/i;
 
+
+/** Cut a message at the first disclaimer/helpline marker (helpline numbers are not counterparties). */
+const DISCLAIMER_RE =
+  /not you|if not (?:you|u)\b|dispute|\bcall\s*\+?\d|sms\s+block|for assistance|to report/i;
+
+/** FamPay prints the user's OWN handle after "using". */
+const OWN_FAM_HANDLE_RE = /\s+using\s+[\w.\-]+@fam\b/gi;
+
+function counterpartyView(body: string): string {
+  const cut = body.search(DISCLAIMER_RE);
+  const head = cut >= 0 ? body.slice(0, cut) : body;
+  return head.replace(OWN_FAM_HANDLE_RE, '');
+}
+
+interface Template {
+  re: RegExp;
+  isExpense: boolean;
+  /** Absent: generic extraction. Present (even null-returning): authoritative. */
+  merchant?: string | ((m: RegExpMatchArray) => string | null);
+  kind?: TransactionKind;
+}
+
+/**
+ * Known message formats, tried in order BEFORE the negative guard and the
+ * generic direction logic. Each is specific enough that a match is decisive.
+ */
+const TEMPLATES: Template[] = [
+  {
+    re: /credit card transaction of (?:Rs\.?|INR|₹)\s*[\d,.]+ on (.+?) is successful/i,
+    isExpense: true,
+    merchant: m => m[1],
+  },
+  {
+    re: /using Apay balance (?:is )?successful at (.+?)(?=\.?\s+Updated|\.\s|$)/i,
+    isExpense: true,
+    merchant: m => m[1],
+  },
+  {
+    re: /^Payment of (?:Rs\.?|INR|₹)\s*[\d,.]+ from (\w+) Money Balance is successful/i,
+    isExpense: true,
+    merchant: m => m[1],
+  },
+  {
+    re: /^Net interest (?:INR|Rs\.?)\s*[\d,.]+ paid on your/i,
+    isExpense: false,
+    merchant: () => 'Deposit interest',
+  },
+  // Card-bill settlements (both legs; classify treats them as transfers)
+  {
+    re: /credit card bill of (?:Rs\.?|INR|₹)\s*[\d,.]+ has been paid successfully/i,
+    isExpense: true,
+    merchant: () => null,
+    kind: 'card_bill',
+  },
+  {
+    re: /^Repayment of (?:Rs\.?|INR|₹)\s*[\d,.]+ received for the .*credit card/i,
+    isExpense: false,
+    merchant: () => null,
+    kind: 'card_bill',
+  },
+  {
+    re: /received your payment of (?:Rs\.?|INR|₹)\s*[\d,.]+ for your/i,
+    isExpense: false,
+    merchant: () => null,
+    kind: 'card_bill',
+  },
+  {
+    re: /^Payment of (?:Rs\.?|INR|₹)\s*[\d,.]+ is credited to your .*Credit Card/i,
+    isExpense: false,
+    merchant: () => null,
+    kind: 'card_bill',
+  },
+  {
+    re: /debited with (?:Rs\.?|INR|₹)\s*[\d,.]+[\s\S]*?account \S*CreditCard will be credited/i,
+    isExpense: true,
+    merchant: () => null,
+    kind: 'card_bill',
+  },
+  // IMPS debit to another account: must beat the "will be credited" guard.
+  {
+    re: /debited with (?:Rs\.?|INR|₹)\s*[\d,.]+[\s\S]*?and account [^()]*?will be credited/i,
+    isExpense: true,
+    merchant: m => {
+      const n = m[0].match(/account\s+\S*?\/([^.()]+?)\s+will be credited/i);
+      return n ? n[1] : null;
+    },
+  },
+  {
+    re: /A\/C\s+Credited;\s*(?:INR|Rs\.?)\s*[\d,.]+[\s\S]*Closure Proceeds/i,
+    isExpense: false,
+    merchant: () => null,
+    kind: 'own_transfer',
+  },
+  {
+    re: /has been debited from your .+? towards (.+?\s(?:Limited|Ltd)\.?)\s*\(/i,
+    isExpense: true,
+    merchant: m => m[1],
+    kind: 'investment',
+  },
+];
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /** When both an expense and an income keyword appear, pick the one nearest the amount. */
@@ -204,29 +348,50 @@ function findCounterpartyPhone(body: string): string | null {
   return null;
 }
 
+/** Normalises a raw merchant candidate; returns '' when nothing usable is left. */
+function cleanMerchant(candidate: string): string {
+  let raw = candidate;
+  // Cut at a sentence boundary: a period followed by whitespace. A period
+  // inside a token ("john.doe@ybl", "Dr.Mehta", "5.00") is preserved.
+  raw = raw.split(/\.\s/)[0];
+  raw = raw.split('(')[0];
+  raw = raw.replace(/^\s*VPA\s+/i, '');
+  raw = raw.replace(/^\s*(?:a\/c|account)\s*[x*\d]+\/?\s*/i, '');
+  raw = raw.replace(/\s+via UPI.*$/i, '');
+  raw = raw.replace(/\s+with txn ID.*$/i, '');
+  raw = raw.replace(/\.?\s*UPI Ref.*$/i, '');
+  raw = raw.replace(/\s+UMRN.*$/i, '');
+  // The noise regex strips one tail clause per pass ("on 03/10/26 Ref 123").
+  for (let prev = ''; prev !== raw; ) {
+    prev = raw;
+    raw = raw.replace(MERCHANT_NOISE_RE, '');
+  }
+  return raw.replace(/[.,;!?]+$/, '').trim();
+}
+
 /**
  * Extracts a merchant name from an "at/to/towards" (or "from", income only)
  * clause. Skips low-quality candidates: "your ..." clauses (excluded by the
- * regex itself) and purely-numeric fragments left over after ":" truncated a
- * time expression (e.g. "at 10:30 at SWIGGY" → skip "10", capture "SWIGGY").
+ * regex itself), purely-numeric fragments left over after ":" truncated a
+ * time expression (e.g. "at 10:30 at SWIGGY" → skip "10", capture "SWIGGY"),
+ * instruction clauses, and the literal placeholder "merchant".
  */
 function extractMerchant(body: string, isExpense: boolean): string | null {
-  const re = isExpense ? MERCHANT_RE_EXPENSE : MERCHANT_RE_INCOME;
-  re.lastIndex = 0;
-  for (const m of body.matchAll(re)) {
-    let raw = m[1];
-    // Cut at a sentence boundary: a period followed by whitespace. A period
-    // inside a token ("john.doe@ybl", "Dr.Mehta", "5.00") is preserved.
-    raw = raw.split(/\.\s/)[0];
-    raw = raw.replace(MERCHANT_NOISE_RE, '');
-    raw = raw.replace(/[.,;!?]+$/, '').trim();
-    if (!raw || /^\d+$/.test(raw)) {
-      continue;
+  const patterns = isExpense
+    ? [MERCHANT_RE_EXPENSE]
+    : [MERCHANT_RE_INCOME_FROM, MERCHANT_RE_INCOME_OTHER];
+  for (const re of patterns) {
+    re.lastIndex = 0;
+    for (const m of body.matchAll(re)) {
+      const raw = cleanMerchant(m[1]);
+      if (!raw || /^\d+$/.test(raw) || /^merchant$/i.test(raw)) {
+        continue;
+      }
+      if (MERCHANT_INSTRUCTION_RE.test(raw)) {
+        continue;
+      }
+      return raw;
     }
-    if (MERCHANT_INSTRUCTION_RE.test(raw)) {
-      continue;
-    }
-    return raw;
   }
   return null;
 }
@@ -267,10 +432,14 @@ export function parseTransaction(
     return null;
   }
 
+  // ── Known templates run first: they are decisive and several would otherwise
+  //    trip the negative guard or the generic direction logic.
+  const template = TEMPLATES.find(t => t.re.test(body));
+
   // ── Guard: promo / autopay-future / failed / OTP / money-request messages ──
   // These all commonly contain a real-looking amount + direction keyword but
   // are not a settled transaction.
-  if (NEGATIVE_GUARD_RE.test(body)) {
+  if (!template && NEGATIVE_GUARDS.some(re => re.test(body))) {
     return null;
   }
 
@@ -295,13 +464,15 @@ export function parseTransaction(
   const isExpenseKeyword = EXPENSE_RE.test(body);
   const isIncomeKeyword = INCOME_RE.test(body);
 
-  if (!isExpenseKeyword && !isIncomeKeyword) {
+  if (!template && !isExpenseKeyword && !isIncomeKeyword) {
     // Amount present but direction unclear (balance alerts, OTP-adjacent, etc.)
     return null;
   }
 
   let isExpense: boolean;
-  if (REFUND_RE.test(body) && isIncomeKeyword && !isExpenseKeyword) {
+  if (template) {
+    isExpense = template.isExpense;
+  } else if (REFUND_RE.test(body) && isIncomeKeyword && !isExpenseKeyword) {
     // Pure refund message ("Refund of Rs.500 credited to your A/c") — income.
     isExpense = false;
   } else if (
@@ -334,18 +505,23 @@ export function parseTransaction(
   // ── 4. Counterparty (priority: VPA > phone > directional account fragment) ─
   let counterparty: string | null = null;
 
-  const vpa = extractVpa(body);
+  // Helpline numbers and the user's own FamPay handle live in the disclaimer /
+  // "using ..." tail; extraction runs on a trimmed copy. raw_text is untouched
+  // (dedup_key hashes it).
+  const view = counterpartyView(body);
+
+  const vpa = extractVpa(view);
   if (vpa) {
     counterparty = vpa;
   } else {
-    const phoneDigits = findCounterpartyPhone(body);
+    const phoneDigits = findCounterpartyPhone(view);
     if (phoneDigits) {
       counterparty = phoneDigits;
     } else {
       const ctAcctRe = isExpense
         ? COUNTERPARTY_ACCT_EXPENSE_RE
         : COUNTERPARTY_ACCT_INCOME_RE;
-      const ctAcctMatch = body.match(ctAcctRe);
+      const ctAcctMatch = view.match(ctAcctRe);
       if (ctAcctMatch && ctAcctMatch[1] !== account) {
         counterparty = ctAcctMatch[1];
       }
@@ -353,7 +529,25 @@ export function parseTransaction(
   }
 
   // ── 5. Merchant ────────────────────────────────────────────────────────────
-  const merchant = extractMerchant(body, isExpense);
+  let merchant: string | null;
+  if (template && template.merchant !== undefined) {
+    const t = template.merchant;
+    const raw = typeof t === 'function' ? t(body.match(template.re) as RegExpMatchArray) : t;
+    const cleaned = raw == null ? '' : cleanMerchant(raw);
+    merchant = cleaned && !/^merchant$/i.test(cleaned) ? cleaned : null;
+  } else {
+    merchant = extractMerchant(view, isExpense);
+  }
+
+  // ── 5b. Kind: money moving between the user's own pockets ───────────────────
+  let kind: TransactionKind | undefined = template?.kind;
+  if (!kind && isExpense && merchant) {
+    if (/^amazon\s*pay(?:\s+balance)?$/i.test(merchant)) {
+      kind = 'wallet_load';
+    } else if (/\bBank (?:Ltd|Limited)\b/i.test(merchant)) {
+      kind = 'own_transfer';
+    }
+  }
 
   // ── 6. Available balance (optional, best-effort) ────────────────────────────
   const balanceMatch = body.match(BALANCE_RE);
@@ -370,6 +564,7 @@ export function parseTransaction(
     account,
     timestamp: ts,
     raw_text: body,
+    ...(kind ? { kind } : {}),
     ...(balance != null && !isNaN(balance) ? { balance } : {}),
   };
 }
