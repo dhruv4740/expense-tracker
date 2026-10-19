@@ -17,12 +17,10 @@ import { DeviceEventEmitter } from 'react-native';
 import { peekBuffer, ackBuffer, onSmsReceived, type RawEvent } from './native/SmsModule';
 import { onNotificationReceived } from './native/NotificationModule';
 import { parseTransaction } from './parser';
-import { insertTransaction, getAllMerchantRules, setAccountBalance } from './db';
-import { categorize } from './categories';
-import type { Category } from './categories';
-import { isSelfTransfer } from './identity';
+import { insertTransaction, getAllMerchantRules } from './db';
+import { classify } from './classify';
 import type { Identity } from './identity';
-import { getIdentity } from './settings';
+import { getIdentity, getFamilyMembers } from './settings';
 
 export const DATA_CHANGED = 'ExpenseDataChanged';
 
@@ -39,6 +37,7 @@ let identityCache: Identity = {
 };
 
 let learnedRulesCache: Record<string, string> = {};
+let familyCache: string[] = [];
 
 /**
  * Reload identity and learned merchant rules from the DB into module-level
@@ -50,6 +49,7 @@ let learnedRulesCache: Record<string, string> = {};
 export function refreshSyncCaches(): void {
   identityCache = getIdentity();
   learnedRulesCache = getAllMerchantRules();
+  familyCache = getFamilyMembers();
 }
 
 // ─── Core processing ──────────────────────────────────────────────────────────
@@ -73,36 +73,17 @@ function processOne(e: RawEvent): boolean {
     return false;
   }
 
-  // 2. Categorise using learned rules first, then keyword map.
-  const category: Category = categorize(
-    parsed.merchant,
-    parsed.raw_text,
-    parsed.counterparty,
-    learnedRulesCache,
-    parsed.isExpense,
-  );
+  // 2. Category + type from the shared classifier (identity, family, kind, rules).
+  const { category, type } = classify(parsed, {
+    identity: identityCache,
+    rules: learnedRulesCache,
+    family: familyCache,
+  });
 
-  // 3. Determine transaction type.
-  //    Self-transfer: counterparty matches one of the user's own identifiers.
-  //    Otherwise: expense vs income follows the parser's isExpense flag.
-  let type: 'expense' | 'income' | 'self';
-  if (isSelfTransfer(parsed, identityCache)) {
-    type = 'self';
-  } else {
-    type = parsed.isExpense ? 'expense' : 'income';
-  }
-
-  // 4. Merchant fallback chain: parser merchant → counterparty → sender.
+  // 3. Merchant fallback chain: parser merchant → counterparty → sender.
   const merchant = parsed.merchant ?? parsed.counterparty ?? sender ?? null;
 
-  // 5. Store available balance if the message included one (best-effort, no wake lock,
-  //    runs only while the app is foregrounded or while draining the buffer on open).
-  if (parsed.balance != null && !isNaN(parsed.balance)) {
-    const accountKey = parsed.account ?? parsed.source ?? 'unknown';
-    setAccountBalance(accountKey, parsed.balance, parsed.timestamp);
-  }
-
-  // 6. Insert (idempotent via dedup_key + cross-channel dedup in db.ts).
+  // 4. Insert (idempotent via dedup_key + cross-channel dedup in db.ts).
   return insertTransaction({
     amount: parsed.amount,
     merchant,

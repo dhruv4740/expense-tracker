@@ -23,6 +23,9 @@ import type { TransactionRow } from './db';
 import { categorize, isGenericMerchantKey } from './categories';
 import type { Category } from './categories';
 import { refreshSyncCaches } from './sync';
+import { classify } from './classify';
+import type { Identity } from './identity';
+import { parseTransaction } from './parser';
 
 const CLEANUP_FLAG_KEY = 'recat_cleanup_v1';
 
@@ -36,17 +39,27 @@ export interface RecategorizationDiff {
  * Pure: decides which auto-categorized rows need their category corrected
  * under the given (already-purged) rules. Manual edits (category_source
  * 'manual') are never touched — the user's explicit choice always wins.
+ *
+ * With `ctx`, each row's raw text is re-parsed and run through the shared
+ * classify() so history gets the same Family / Investment / transfer logic as
+ * newly captured messages. Without it, only the keyword categorizer runs.
  */
 export function planRecategorization(
   rows: TransactionRow[],
   rules: Record<string, string>,
+  ctx?: { identity: Identity; family: string[] },
 ): RecategorizationDiff[] {
   const diffs: RecategorizationDiff[] = [];
   for (const row of rows) {
     if (row.id == null || row.category_source === 'manual') {
       continue;
     }
-    const recategorized = categorize(
+    const parsed = ctx
+      ? parseTransaction(row.source ?? '', row.raw_text ?? '', row.timestamp)
+      : null;
+    const recategorized = parsed
+      ? classify(parsed, { identity: ctx!.identity, rules, family: ctx!.family }).category
+      : categorize(
       row.merchant,
       row.raw_text ?? '',
       row.counterparty ?? null,

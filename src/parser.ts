@@ -208,7 +208,7 @@ const DISCLAIMER_RE =
   /not you|if not (?:you|u)\b|dispute|\bcall\s*\+?\d|sms\s+block|for assistance|to report/i;
 
 /** FamPay prints the user's OWN handle after "using". */
-const OWN_FAM_HANDLE_RE = /\s+using\s+[\w.\-]+@fam\b/gi;
+const OWN_FAM_HANDLE_RE = /\s+using\s+[\w.-]+@fam\b/gi;
 
 function counterpartyView(body: string): string {
   const cut = body.search(DISCLAIMER_RE);

@@ -71,6 +71,22 @@ export function setIdentity(identity: Identity): void {
   setJSON(IDENTITY_KEY, identity);
 }
 
+// ─── Family members ───────────────────────────────────────────────────────────
+
+const FAMILY_KEY = 'family_members';
+
+/** Names or VPAs of family members whose credits are categorized 'Family'. */
+export function getFamilyMembers(): string[] {
+  const stored = getJSON<unknown>(FAMILY_KEY, []);
+  return Array.isArray(stored)
+    ? stored.filter((x): x is string => typeof x === 'string')
+    : [];
+}
+
+export function setFamilyMembers(members: string[]): void {
+  setJSON(FAMILY_KEY, members);
+}
+
 // ─── Dismissed capture apps ────────────────────────────────────────────────────
 
 const DISMISSED_APPS_KEY = 'dismissedApps';

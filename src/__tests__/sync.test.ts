@@ -20,11 +20,11 @@ jest.mock('../native/NotificationModule', () => ({
 jest.mock('../db', () => ({
   insertTransaction: jest.fn(() => true),
   getAllMerchantRules: jest.fn(() => ({})),
-  setAccountBalance: jest.fn(),
 }));
 
 jest.mock('../settings', () => ({
   getIdentity: jest.fn(() => ({ name: '', phones: [], upiHandles: [], accountLast4: [] })),
+  getFamilyMembers: jest.fn(() => []),
 }));
 
 import { syncBuffer } from '../sync';
