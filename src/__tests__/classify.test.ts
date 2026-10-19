@@ -124,6 +124,22 @@ describe('classify', () => {
   });
 });
 
+describe('classify: own-account IMPS', () => {
+  const ctx = { identity, rules: {}, family: [] as string[] };
+  const parse = (body: string) => parseTransaction('VM-TEST-S', body, 1)!;
+  it('IMPS "To A/c" with an own account fragment is self', () => {
+    expect(classify(parse('Rs. 100 debited from a/c xx2222 IMPS To A/c xxxxxxxx1111 Ref 1'), ctx).type).toBe('self');
+  });
+  it('"and account X/NAME will be credited" with an own account is self', () => {
+    expect(classify(parse('Your account XXXXXXX2222 debited with Rs. 8103 on 01-12-25 and account XXXXXXX1111/SOME ONE will be credited.(IMPS Ref no. 1)'), ctx).type).toBe('self');
+  });
+  it('a broker IMPS credit is Investment and an FD/credit-transfer is self', () => {
+    expect(classify(parse('Received! INR 45,000.00 in HDFC Bank A/c xx2222 On 25-09-25 For IMPS -GROWW INVEST TECH PR- 529240802077 Avl bal INR 1.00'), ctx))
+      .toEqual({ category: 'Investment', type: 'income' });
+    expect(classify(parse('IndusInd A/C **2222 Debited; INR 100,000.00 Ref-Transfer/Debit for FD A/c 379358580202 : Bal INR 5.00'), ctx).type).toBe('self');
+  });
+});
+
 describe('Family category wiring', () => {
   it('is registered as income and has display metadata', () => {
     expect(CATEGORIES).toContain('Family');

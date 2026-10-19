@@ -180,7 +180,7 @@ const REF_NUMBER_CONTEXT_RE = /(?:ref|utr|rrn|txn)[^a-z0-9]{0,6}$/i;
  * unrelated sentence to grab an unrelated account number.
  */
 const COUNTERPARTY_ACCT_EXPENSE_RE =
-  /\bto\s+(?:a\/c|acct|account)[^\d]{0,10}(\d{3,4})\b/i;
+  /\b(?:to|and)\s+(?:a\/c|acct|account)[^\d]{0,10}(\d{3,4})\b/i;
 const COUNTERPARTY_ACCT_INCOME_RE =
   /\bfrom\s+(?:a\/c|acct|account)[^\d]{0,10}(\d{3,4})\b/i;
 
@@ -288,6 +288,33 @@ const TEMPLATES: Template[] = [
       const n = m[0].match(/account\s+\S*?\/([^.()]+?)\s+will be credited/i);
       return n ? n[1] : null;
     },
+  },
+  // Fixed-deposit placement: the user's own money moving into an FD.
+  {
+    re: /Debited;\s*(?:INR|Rs\.?)\s*[\d,.]+[\s\S]*(?:for FD A\/c|Transfer\/Debit for FD|FD booking)/i,
+    isExpense: true,
+    merchant: () => null,
+    kind: 'own_transfer',
+  },
+  // Credit between the user's own accounts at the same bank.
+  {
+    re: /Credited;\s*(?:INR|Rs\.?)\s*[\d,.]+[\s\S]*Credit Transfer From \w+ Account/i,
+    isExpense: false,
+    merchant: () => null,
+    kind: 'own_transfer',
+  },
+  // HDFC IMPS credit: the sender's name sits between "For IMPS -" and the next "-".
+  {
+    re: /^Received!\s*(?:INR|Rs\.?)\s*[\d,.]+ in [\s\S]*? For IMPS -([^-]+?)-/i,
+    isExpense: false,
+    merchant: m => m[1],
+  },
+  // HDFC IPO application debit: Info: SBIFUNDS/<application no>-...
+  {
+    re: /debited from [\s\S]*?Info:\s*([A-Z]*FUNDS)\/\d{12,}/i,
+    isExpense: true,
+    merchant: m => m[1],
+    kind: 'investment',
   },
   {
     re: /A\/C\s+Credited;\s*(?:INR|Rs\.?)\s*[\d,.]+[\s\S]*Closure Proceeds/i,
@@ -544,7 +571,7 @@ export function parseTransaction(
   if (!kind && isExpense && merchant) {
     if (/^amazon\s*pay(?:\s+balance)?$/i.test(merchant)) {
       kind = 'wallet_load';
-    } else if (/\bBank (?:Ltd|Limited)\b/i.test(merchant)) {
+    } else if (/\S\s+bank(?:\s+(?:ltd|limited))?\.?$/i.test(merchant.trim())) {
       kind = 'own_transfer';
     }
   }

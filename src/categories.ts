@@ -505,6 +505,13 @@ function categorizeCredit(name: string, body: string): Category {
     return 'Income';
   }
 
+  // A credit from a broker / fund house is a payout of the user's own money.
+  for (const { category, testName } of COMPILED_KEYWORD_MAP) {
+    if (category === 'Investment' && testName(name)) {
+      return 'Investment';
+    }
+  }
+
   // A refund is money coming back from a merchant; keep it in that merchant's
   // category so it nets against the original spend.
   if (/\b(refund|reversal|reversed)\b/i.test(haystack)) {

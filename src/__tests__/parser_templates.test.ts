@@ -163,3 +163,39 @@ describe('kind: wallet loads and own-bank payees', () => {
     expect(p('Rs. 50 sent from a/c xx1111 to Cafe Moon')?.kind).toBeUndefined();
   });
 });
+
+describe('round 2 leaks', () => {
+  it('FD placement is an own_transfer expense', () => {
+    const r = p('IndusInd A/C **1111 Debited; INR 100,000.00 Ref-Transfer/Debit for FD A/c 379358580202 : Bal INR 5.00.Dispute-Call 18602677777-IndusInd Bank');
+    expect(r).toMatchObject({ amount: 100000, isExpense: true, kind: 'own_transfer' });
+  });
+
+  it('same-bank credit transfer is an own_transfer income', () => {
+    const r = p('IndusInd A/C **1111 Credited; INR 300,000.00 Ref-Credit Transfer From IndusInd Account/2480000001 : Bal INR 5.00-IndusInd Bank');
+    expect(r).toMatchObject({ amount: 300000, isExpense: false, kind: 'own_transfer' });
+  });
+
+  it('HDFC IMPS credit takes the sender name between "For IMPS -" and the next "-"', () => {
+    const r = p('Received! INR 45,000.00 in HDFC Bank A/c xx1111 On 25-09-25 For IMPS -GROWW INVEST TECH PR- 529240802077 Avl bal INR 1.00');
+    expect(r).toMatchObject({ amount: 45000, isExpense: false, merchant: 'GROWW INVEST TECH PR' });
+    expect(categorize(r!.merchant, r!.raw_text, r!.counterparty, {}, false)).toBe('Investment');
+  });
+
+  it('HDFC IPO debit (Info: ...FUNDS/<no>) is an investment expense', () => {
+    const r = p('UPDATE: INR 14,924.00 debited from HDFC Bank XX1111 on 18-JUL-26. Info: SBIFUNDS/2400000041076281-XXXXXXXXXX5858');
+    expect(r).toMatchObject({ amount: 14924, isExpense: true, kind: 'investment' });
+  });
+
+  it.each([
+    ['Rs. 100 sent from a/c xx1111 on 04-Oct-26 to KOTAK MAHINDRA BANK (UPI Ref: 1)', 'own_transfer'],
+    ['Rs. 100 sent from a/c xx1111 on 04-Oct-26 to Kotak Mahindra Bank Limited (UPI Ref: 1)', 'own_transfer'],
+    ['Rs. 100 sent from a/c xx1111 on 04-Oct-26 to Bank of Baroda canteen (UPI Ref: 1)', undefined],
+  ])('own-bank payee: %s', (body, kind) => {
+    expect(p(body)?.kind).toBe(kind);
+  });
+
+  it('own-account IMPS counterparty fragments are parsed', () => {
+    expect(p('Rs. 100 debited from a/c xx1111 IMPS To A/c xxxxxxxx4545 Ref 1')?.counterparty).toBe('4545');
+    expect(p('Your account XXXXXXX1111 debited with Rs. 8103 on 01-12-25 and account XXXXXXX3333/ANITA RAO will be credited.(IMPS Ref no. 1)')?.counterparty).toBe('3333');
+  });
+});
