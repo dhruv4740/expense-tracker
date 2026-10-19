@@ -458,6 +458,7 @@ export default function TransactionsScreen({ navigation }: Props) {
           },
           { text: 'Cancel', style: 'cancel' },
         ],
+        { cancelable: true }, // Android shows at most 3 buttons; tap outside to dismiss
       );
     },
     [navigation],
