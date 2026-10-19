@@ -305,7 +305,7 @@ const TEMPLATES: Template[] = [
   },
   // HDFC IMPS credit: the sender's name sits between "For IMPS -" and the next "-".
   {
-    re: /^Received!\s*(?:INR|Rs\.?)\s*[\d,.]+ in [\s\S]*? For IMPS -([^-]+?)-/i,
+    re: /^Received!\s*(?:INR|Rs\.?)\s*[\d,.]+ in [\s\S]*?\sFor IMPS -([^-]+?)-/i,
     isExpense: false,
     merchant: m => m[1],
   },

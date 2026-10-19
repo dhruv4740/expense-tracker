@@ -181,6 +181,11 @@ describe('round 2 leaks', () => {
     expect(categorize(r!.merchant, r!.raw_text, r!.counterparty, {}, false)).toBe('Investment');
   });
 
+  it('HDFC IMPS credit also parses in its real multi-line layout', () => {
+    const r = p('Received!\nINR 45,000.00 in HDFC Bank A/c xx1111\nOn 25-09-25\nFor IMPS -GROWW INVEST TECH PR- 529240802077\nAvl bal INR 1.00');
+    expect(r).toMatchObject({ amount: 45000, isExpense: false, merchant: 'GROWW INVEST TECH PR' });
+  });
+
   it('HDFC IPO debit (Info: ...FUNDS/<no>) is an investment expense', () => {
     const r = p('UPDATE: INR 14,924.00 debited from HDFC Bank XX1111 on 18-JUL-26. Info: SBIFUNDS/2400000041076281-XXXXXXXXXX5858');
     expect(r).toMatchObject({ amount: 14924, isExpense: true, kind: 'investment' });
