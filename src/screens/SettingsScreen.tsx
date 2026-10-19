@@ -160,6 +160,8 @@ export default function SettingsScreen() {
   const [categoryBudgets, setCategoryBudgets] = useState<Record<string, string>>({});
 
   // ── Notification allowlist ───────────────────────────────────────────────────
+  const [showApps, setShowApps] = useState(false);
+  const [showPerms, setShowPerms] = useState(false);
   const [allowlist, setAllowlistState] = useState<AllowlistEntry[]>([]);
   const [showAppPicker, setShowAppPicker] = useState(false);
   const [allInstalledApps, setAllInstalledApps] = useState<InstalledApp[]>([]);
@@ -547,7 +549,13 @@ export default function SettingsScreen() {
       </Card>
 
       {/* ── Banks & Apps Captured ── */}
-      <SectionHeader title="Apps to Capture Notifications From" />
+      <TouchableOpacity style={styles.collapseRow} onPress={() => setShowApps(v => !v)} activeOpacity={0.7}>
+        <Text style={styles.collapseTitle}>Apps to Capture Notifications From</Text>
+        <Text style={styles.collapseMeta}>
+          {allowlist.filter(e => e.enabled).length} on {showApps ? '▾' : '▸'}
+        </Text>
+      </TouchableOpacity>
+      {showApps && (
       <Card>
         {allowlistError && (
           <Text style={styles.allowError}>⚠️ {allowlistError}</Text>
@@ -587,6 +595,7 @@ export default function SettingsScreen() {
           <Text style={styles.addAppBtnText}>+ Add App</Text>
         </TouchableOpacity>
       </Card>
+      )}
 
       {/* ── Add App Picker Modal ── */}
       <Modal
@@ -642,7 +651,13 @@ export default function SettingsScreen() {
       </Modal>
 
       {/* ── Permissions ── */}
-      <SectionHeader title="Permissions" />
+      <TouchableOpacity style={styles.collapseRow} onPress={() => setShowPerms(v => !v)} activeOpacity={0.7}>
+        <Text style={styles.collapseTitle}>Permissions</Text>
+        <Text style={styles.collapseMeta}>
+          {notifGranted === null ? '…' : notifGranted ? 'Granted' : 'Not granted'} {showPerms ? '▾' : '▸'}
+        </Text>
+      </TouchableOpacity>
+      {showPerms && (
       <Card>
         <View style={styles.permRow}>
           <View style={styles.permLeft}>
@@ -676,6 +691,7 @@ export default function SettingsScreen() {
           )}
         </View>
       </Card>
+      )}
 
       {/* ── Categorization ── */}
       <SectionHeader title="Categorization" />
@@ -778,6 +794,20 @@ export default function SettingsScreen() {
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
+  collapseRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.md,
+    marginTop: theme.spacing.md,
+  },
+  collapseTitle: {
+    fontSize: theme.font.size.sm,
+    fontWeight: theme.font.weight.semibold,
+    color: theme.colors.textSecondary,
+  },
+  collapseMeta: { fontSize: theme.font.size.sm, color: theme.colors.accent },
   container: {
     flex: 1,
     backgroundColor: theme.colors.bg,
