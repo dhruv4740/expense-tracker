@@ -50,6 +50,12 @@ describe('templates', () => {
     expect(r).toMatchObject({ amount: 227664.55, isExpense: false, kind: 'own_transfer' });
   });
 
+  it('FD premature-closure request acknowledgement is not a transaction, the proceeds credit is', () => {
+    expect(p('We have received your premature closure request for FD XX1111 - 1 amounting to Rs. 5000 , which has been processed successfully. Acme SFBL')).toBeNull();
+    const r = p('IndusInd A/C  Credited; INR 5,012.00 Ref-301129462891 : Closure Proceeds.Bal INR 9,000.00.Dispute-Call 18602677777-IndusInd Bank');
+    expect(r).toMatchObject({ amount: 5012, isExpense: false, kind: 'own_transfer' });
+  });
+
   it('IPO allotment debit is an investment expense', () => {
     const r = p('Rs. 14,905 has been debited from your slice savings account xx1111 towards ACME FIRE PROTECT LIMITED (Ref No 629195276529). Not you? Call 08048329999 - slice');
     expect(r).toMatchObject({ amount: 14905, isExpense: true, kind: 'investment', merchant: 'ACME FIRE PROTECT LIMITED' });

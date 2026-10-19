@@ -105,6 +105,9 @@ const NEGATIVE_GUARDS: RegExp[] = [
   // Kotak "twin" confirmation of an already-reported transaction
   /Your transaction for INR [\d,.]+ against txn ID \S+ has been processed successfully/i,
   /UPI LITE Top-?up/i,
+  // FD closure request acknowledgement (the real money is the later
+  // "Closure Proceeds" credit)
+  /premature closure request/i,
   // Mandate setup (NOT a bare "UPI Mandate": that prefix is a real debit)
   /mandate[\s\S]*successfully created/i,
   /collect request/i,
