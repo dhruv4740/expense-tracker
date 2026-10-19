@@ -511,3 +511,17 @@ describe('repayment banner (proactive, strict)', () => {
     expect(isBannerWorthy(s)).toBe(false);
   });
 });
+
+describe('splitOwed', () => {
+  const { splitOwed } = require('../settle');
+  it('friends owe (n-1)/n of the fare, rounded to paise', () => {
+    expect(splitOwed(300, 2)).toBe(150);
+    expect(splitOwed(300, 3)).toBe(200);
+    expect(splitOwed(250, 4)).toBe(187.5);
+    expect(splitOwed(100, 3)).toBe(66.67);
+  });
+  it('returns 0 for fewer than 2 people or non-positive amounts', () => {
+    expect(splitOwed(300, 1)).toBe(0);
+    expect(splitOwed(0, 3)).toBe(0);
+  });
+});

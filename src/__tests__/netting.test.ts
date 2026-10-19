@@ -125,3 +125,20 @@ describe('netting: Dashboard hero figures', () => {
     expect(outOfPocket(300, 1000)).toBe(0);
   });
 });
+
+describe('netting: Uber screen Paid − Got back = Your share', () => {
+  const rows = [
+    row(1, 'expense', 300, 'Uber'), // unsplit, unpaid
+    row(2, 'expense', 200, 'Uber'), // split, half repaid
+    row(3, 'income', 100, 'Friend Transfer', 2),
+    row(4, 'expense', 100, 'Uber'), // partially repaid
+    row(5, 'income', 40, 'Friend Transfer', 4),
+    row(6, 'expense', 150, 'Uber'), // legacy same-direction link
+    row(7, 'expense', 150, 'Other', 6),
+  ];
+  it('reconciles on a mixed month', () => {
+    const u = netUber(rows, range);
+    expect(u).toEqual({ spent: 750, reimbursed: 290, net: 460 });
+    expect(u.spent - u.reimbursed).toBe(u.net);
+  });
+});

@@ -464,3 +464,14 @@ export function pickRepaymentBanner(
   }
   return best;
 }
+
+/**
+ * One-tap split: a ride of `amount` shared by `people` (including you) leaves
+ * the other people owing (people-1)/people of it. Rounded to paise.
+ */
+export function splitOwed(amount: number, people: number): number {
+  if (!(people >= 2) || !(amount > 0)) {
+    return 0;
+  }
+  return Math.round(((amount * (people - 1)) / people) * 100) / 100;
+}
