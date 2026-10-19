@@ -87,8 +87,23 @@ export function netUber(
   range: { from: number; to: number },
 ): { spent: number; reimbursed: number; net: number } {
   const paid = paidBack(rows);
+  const byId = new Map(rows.map(r => [r.id, r]));
   let spent = 0;
   let reimbursed = 0;
+  // Legacy same-direction links: an expense row linked to an Uber ride counts in full.
+  for (const r of rows) {
+    const ride = r.settles_id != null ? byId.get(r.settles_id) : undefined;
+    if (
+      ride &&
+      r.type === 'expense' &&
+      ride.type === 'expense' &&
+      ride.category === 'Uber' &&
+      ride.timestamp >= range.from &&
+      ride.timestamp <= range.to
+    ) {
+      reimbursed += r.amount;
+    }
+  }
   for (const r of rows) {
     if (
       r.category !== 'Uber' ||

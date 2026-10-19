@@ -696,7 +696,8 @@ export function getUberSummary(range: Range): UberSummary {
   // and the Dashboard donut always agree): per ride, the income rows linked via
   // settles_id, capped at the ride's amount; plus legacy income hand-tagged
   // 'Uber' with no link (every pre-v4 reimbursement), net of anything that
-  // itself cancels it. Same-direction links never reduce a ride.
+  // itself cancels it. Same-direction links never reduce a ride in the Dashboard
+  // totals, but legacy ones still count as reimbursed on this card (last branch).
   const totalsRes = conn.executeSync(
     `SELECT
         COALESCE(SUM(CASE WHEN type = 'expense' THEN amount END), 0) AS spent,
@@ -724,8 +725,18 @@ export function getUberSummary(range: Range): UberSummary {
            ${NETTING_JOIN}
           WHERE t.category = 'Uber' AND t.type = 'income'
             AND t.settles_id IS NULL AND t.timestamp BETWEEN ? AND ?
+         UNION ALL
+         -- Legacy same-direction links (Uber "repayment" mode: an expense row
+         -- linked to a ride). Counted in full as before, so existing Uber
+         -- numbers do not move now that netting is opposite-direction only.
+         SELECT s.amount AS amount, 1 AS n
+           FROM transactions s
+           JOIN transactions ride ON ride.id = s.settles_id
+          WHERE ride.category = 'Uber' AND ride.type = 'expense'
+            AND s.type = 'expense'
+            AND ride.timestamp BETWEEN ? AND ?
        )`,
-    [from, to, from, to],
+    [from, to, from, to, from, to],
   );
   const totRow = (totalsRes.rows ?? [])[0] ?? {};
   const reimbRow = (reimbRes.rows ?? [])[0] ?? {};

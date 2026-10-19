@@ -74,9 +74,22 @@ describe('netting: Uber card and Dashboard agree', () => {
         row(3, 'income', 50, 'Uber'),
       ],
     ],
-    ['same-direction repayment', [row(1, 'expense', 150, 'Uber'), row(2, 'expense', 150, 'Other', 1)]],
   ];
   it.each(cases)('%s', (_name, rows) => {
     expect(netUber(rows, range).net).toBeCloseTo(cat(rows, 'Uber') ?? 0, 6);
+  });
+});
+
+describe('netting: legacy same-direction Uber links', () => {
+  const rows = [row(1, 'expense', 150, 'Uber'), row(2, 'expense', 150, 'Other', 1)];
+  it('still count as reimbursed on the Uber card', () => {
+    expect(netUber(rows, range)).toEqual({ spent: 150, reimbursed: 150, net: 0 });
+  });
+  it('but do not reduce the ride in the Dashboard totals', () => {
+    expect(cat(rows, 'Uber')).toBe(150);
+  });
+  it('an opposite-direction link is not double counted', () => {
+    const r = [row(1, 'expense', 300, 'Uber'), row(2, 'income', 100, 'Friend Transfer', 1)];
+    expect(netUber(r, range).reimbursed).toBe(100);
   });
 });
