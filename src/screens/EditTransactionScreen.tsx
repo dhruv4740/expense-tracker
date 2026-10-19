@@ -40,7 +40,7 @@ import { isGenericMerchantKey, normalizeMerchantKey } from '../categories';
 import { DATA_CHANGED, refreshSyncCaches } from '../sync';
 import { suggestPairs } from '../settle';
 import { promptMarkTransfer } from './markTransfer';
-import { CategoryChip, Icon, SectionHeader } from '../components';
+import { CategoryChip, Icon } from '../components';
 import { theme } from '../theme';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -50,8 +50,8 @@ type Props = NativeStackScreenProps<RootStackParamList, 'EditTransaction'>;
 type SegType = { label: string; value: TransactionType };
 
 const TYPE_SEGMENTS: SegType[] = [
-  { label: 'Debit', value: 'expense' },
-  { label: 'Credit', value: 'income' },
+  { label: 'Expense', value: 'expense' },
+  { label: 'Income', value: 'income' },
   { label: 'Self', value: 'self' },
 ];
 
@@ -340,6 +340,13 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
     );
   }, [isEdit, tx, navigation]);
 
+  const [editingHeader, setEditingHeader] = useState(!isEdit);
+  const [showRaw, setShowRaw] = useState(false);
+  const allCategories = GROUPED_CATEGORIES.flatMap(g => g.categories);
+  const canMarkSelf = isEdit && tx?.id != null && type !== 'self' && tx.settles_id == null;
+  const isUberRide = isEdit && tx?.category === 'Uber' && tx.type === 'expense' && tx.settles_id == null;
+  const hasActions = canMarkSelf || pairable || tx?.settles_id != null || isUberRide;
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
@@ -352,150 +359,126 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
       contentContainerStyle={styles.content}
       keyboardShouldPersistTaps="handled"
     >
-      {/* Amount */}
-      <SectionHeader title="Amount (₹)" />
-      <View style={styles.card}>
-        <TextInput
-          style={styles.amountInput}
-          value={amount}
-          onChangeText={setAmount}
-          keyboardType="decimal-pad"
-          placeholder="0.00"
-          placeholderTextColor={theme.colors.textMuted}
-          autoFocus={!isEdit}
-        />
-      </View>
-
-      {/* Type */}
-      <SectionHeader title="Type" />
-      <View style={styles.card}>
-        <View style={styles.segRow}>
-          {TYPE_SEGMENTS.map(seg => (
-            <TouchableOpacity
-              key={seg.value}
-              style={[
-                styles.segment,
-                type === seg.value ? styles.segmentActive : undefined,
-              ]}
-              onPress={() => setType(seg.value)}
-            >
-              <Text
-                style={[
-                  styles.segmentText,
-                  type === seg.value ? styles.segmentTextActive : undefined,
-                ]}
-              >
-                {seg.label}
-              </Text>
+      {/* Header: amount · merchant · date — tap to edit in place */}
+      {editingHeader ? (
+        <View style={styles.card}>
+          <TextInput
+            style={styles.amountInput}
+            value={amount}
+            onChangeText={setAmount}
+            keyboardType="decimal-pad"
+            placeholder="0.00"
+            placeholderTextColor={theme.colors.textMuted}
+            autoFocus={!isEdit}
+          />
+          <TextInput
+            style={styles.textInput}
+            value={merchant}
+            onChangeText={setMerchant}
+            placeholder="Merchant name"
+            placeholderTextColor={theme.colors.textMuted}
+            returnKeyType="next"
+          />
+          <View style={styles.dateTimeRow}>
+            <TouchableOpacity style={styles.dateTimeBtn} onPress={openDatePicker}>
+              <Icon name="calendar" size={16} color={theme.colors.accent} />
+              <Text style={styles.dateTimeText}>{formatDate(timestamp)}</Text>
             </TouchableOpacity>
-          ))}
+            <TouchableOpacity style={styles.dateTimeBtn} onPress={openTimePicker}>
+              <Text style={styles.dateTimeText}>{formatTime(timestamp)}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.shortcutBtn} onPress={setToday}>
+              <Text style={styles.shortcutText}>Today</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.shortcutBtn} onPress={setYesterday}>
+              <Text style={styles.shortcutText}>Yest.</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
-      {isEdit && tx?.id != null && type !== 'self' && tx.settles_id == null && (
+      ) : (
         <TouchableOpacity
-          style={styles.unlinkBtn}
-          onPress={() => promptMarkTransfer(tx, () => navigation.goBack())}
-          activeOpacity={0.8}
+          style={[styles.card, styles.header]}
+          onPress={() => setEditingHeader(true)}
+          activeOpacity={0.7}
         >
-          <Text style={styles.unlinkText}>Mark as transfer to self</Text>
+          <Text style={styles.headerAmount}>{rupees(parseFloat(amount) || 0)}</Text>
+          <Text style={styles.headerSub} numberOfLines={1}>
+            {merchant.trim() || tx?.source || 'No merchant'} · {formatDate(timestamp)} {formatTime(timestamp)}
+          </Text>
         </TouchableOpacity>
       )}
 
-      {/* Category */}
-      <SectionHeader title="Category" />
-      {GROUPED_CATEGORIES.map(({ group, categories }) => (
-        <View key={group}>
-          <Text style={styles.groupLabel}>{group.toUpperCase()}</Text>
-          <View style={[styles.card, styles.catCard]}>
-            {categories.map(cat => (
-              <TouchableOpacity
-                key={cat}
-                onPress={() => setCategory(cat)}
-                style={[
-                  styles.catChip,
-                  category === cat ? styles.catChipActive : undefined,
-                ]}
-              >
-                <CategoryChip category={cat} small />
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-      ))}
+      {/* Type */}
+      <View style={[styles.card, styles.segRow]}>
+        {TYPE_SEGMENTS.map(seg => (
+          <TouchableOpacity
+            key={seg.value}
+            style={[styles.segment, type === seg.value ? styles.segmentActive : undefined]}
+            onPress={() => setType(seg.value)}
+          >
+            <Text
+              style={[styles.segmentText, type === seg.value ? styles.segmentTextActive : undefined]}
+            >
+              {seg.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
 
-      {/* Merchant */}
-      <SectionHeader title="Merchant" />
-      <View style={styles.card}>
+      {/* Category */}
+      <View style={[styles.card, styles.catCard]}>
+        {allCategories.map(cat => (
+          <TouchableOpacity
+            key={cat}
+            onPress={() => setCategory(cat)}
+            style={[styles.catChip, category === cat ? styles.catChipActive : undefined]}
+          >
+            <CategoryChip category={cat} small />
+          </TouchableOpacity>
+        ))}
+      </View>
+      {isEdit && category !== tx?.category && (
+        <View style={[styles.card, styles.toggleRow]}>
+          <Text style={styles.toggleLabel}>Always use this category for this merchant</Text>
+          <Switch
+            value={applyToAll}
+            onValueChange={setApplyToAll}
+            trackColor={{ true: theme.colors.accent, false: theme.colors.surfaceAlt }}
+            thumbColor={theme.colors.textPrimary}
+          />
+        </View>
+      )}
+
+      {/* Note */}
+      <View style={styles.card} onLayout={e => { noteFieldY.current = e.nativeEvent.layout.y; }}>
         <TextInput
           style={styles.textInput}
-          value={merchant}
-          onChangeText={setMerchant}
-          placeholder="Merchant name"
+          value={note}
+          onChangeText={setNote}
+          onFocus={() => scrollFieldIntoView(noteFieldY.current)}
+          placeholder="Note"
           placeholderTextColor={theme.colors.textMuted}
-          returnKeyType="next"
+          returnKeyType="done"
+          maxLength={200}
         />
       </View>
 
-      {/* Date */}
-      <SectionHeader title="Date & Time" />
-      <View style={styles.card}>
-        <View style={styles.dateTimeRow}>
-          <TouchableOpacity style={styles.dateTimeBtn} onPress={openDatePicker}>
-            <Icon name="calendar" size={16} color={theme.colors.accent} />
-            <Text style={styles.dateTimeText}>{formatDate(timestamp)}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.dateTimeBtn} onPress={openTimePicker}>
-            <Text style={styles.dateTimeText}>{formatTime(timestamp)}</Text>
-          </TouchableOpacity>
-        </View>
-        <View style={styles.dateShortcuts}>
-          <TouchableOpacity style={styles.shortcutBtn} onPress={setToday}>
-            <Text style={styles.shortcutText}>Today</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.shortcutBtn} onPress={setYesterday}>
-            <Text style={styles.shortcutText}>Yesterday</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {/* Settlement link — shown only when this row settles another one.
-          Every link MUST be undoable here: a settled row is excluded from
-          spend/income totals, and an exclusion the user can't find or reverse
-          is indistinguishable from lost data. */}
-      {tx?.settles_id != null && (
-        <>
-          <SectionHeader title="Settlement" />
-          <View style={styles.card}>
+      {/* Actions: only what applies to this row. Every link stays undoable here:
+          a settled row is excluded from spend/income totals, and an exclusion the
+          user can't find or reverse is indistinguishable from lost data. */}
+      {hasActions && (
+        <View style={styles.card}>
+          {tx?.settles_id != null && (
             <Text style={styles.settlementText}>
               {links.parent
                 ? `Cancels ${rupees(tx.amount)} ${
                     tx.type === 'income' ? 'payment to' : 'received from'
                   } ${whoIs(links.parent)}`
-                : 'This payment is linked to another transaction, so it isn’t counted as separate spending.'}
+                : 'Linked to another transaction, so it is not counted as separate spending.'}
             </Text>
-            <TouchableOpacity
-              style={styles.unlinkBtn}
-              onPress={() => {
-                if (tx?.id != null) {
-                  setSettlement(tx.id, null);
-                  DeviceEventEmitter.emit(DATA_CHANGED);
-                  navigation.goBack();
-                }
-              }}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.unlinkText}>Unlink — count it on its own</Text>
-            </TouchableOpacity>
-          </View>
-        </>
-      )}
-
-      {/* Pair-to-cancel: repayments that net against this row. */}
-      {pairable && (
-        <>
-          <SectionHeader title="Repayments" />
-          <View style={styles.card}>
-            {links.children.map(c => (
+          )}
+          {pairable &&
+            links.children.map(c => (
               <View key={c.id} style={styles.pairRow}>
                 <Text style={[styles.settlementText, styles.pairText]}>
                   {c.type !== tx?.type ? 'Paid back' : 'Linked'} {rupees(c.amount)} by {whoIs(c)}
@@ -505,15 +488,59 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
                 </TouchableOpacity>
               </View>
             ))}
-            <TouchableOpacity
-              style={styles.unlinkBtn}
-              onPress={() => setShowPairs(true)}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.unlinkText}>Cancel out with a repayment</Text>
-            </TouchableOpacity>
+          <View style={styles.actionsRow}>
+            {tx?.settles_id != null && (
+              <TouchableOpacity
+                style={styles.actionBtn}
+                onPress={() => {
+                  if (tx?.id != null) {
+                    setSettlement(tx.id, null);
+                    DeviceEventEmitter.emit(DATA_CHANGED);
+                    navigation.goBack();
+                  }
+                }}
+              >
+                <Text style={styles.unlinkText}>Unlink</Text>
+              </TouchableOpacity>
+            )}
+            {pairable && (
+              <TouchableOpacity style={styles.actionBtn} onPress={() => setShowPairs(true)}>
+                <Text style={styles.unlinkText}>Cancel out…</Text>
+              </TouchableOpacity>
+            )}
+            {canMarkSelf && tx && (
+              <TouchableOpacity
+                style={styles.actionBtn}
+                onPress={() => promptMarkTransfer(tx, () => navigation.goBack())}
+              >
+                <Text style={styles.unlinkText}>Transfer to self</Text>
+              </TouchableOpacity>
+            )}
+            {isUberRide && (
+              <TouchableOpacity style={styles.actionBtn} onPress={() => navigation.navigate('Uber')}>
+                <Text style={styles.unlinkText}>Uber split</Text>
+              </TouchableOpacity>
+            )}
           </View>
-        </>
+        </View>
+      )}
+
+      {/* Raw SMS — collapsed */}
+      {isEdit && tx?.raw_text ? (
+        <TouchableOpacity
+          style={styles.card}
+          onPress={() => setShowRaw(v => !v)}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.settlementText}>{showRaw ? '▾' : '▸'} Original message</Text>
+          {showRaw && <Text style={styles.rawText}>{tx.raw_text}</Text>}
+        </TouchableOpacity>
+      ) : null}
+
+      {isEdit && (
+        <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete}>
+          <Text style={styles.deleteBtnText}>Delete transaction</Text>
+        </TouchableOpacity>
       )}
 
       <Modal
@@ -560,54 +587,14 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
           </View>
         </View>
       </Modal>
-
-      {/* Note */}
-      <SectionHeader title="Note (optional)" />
-      <View
-        style={styles.card}
-        onLayout={e => { noteFieldY.current = e.nativeEvent.layout.y; }}
-      >
-        <TextInput
-          style={[styles.textInput, styles.noteInput]}
-          value={note}
-          onChangeText={setNote}
-          onFocus={() => scrollFieldIntoView(noteFieldY.current)}
-          placeholder="Add a note…"
-          placeholderTextColor={theme.colors.textMuted}
-          multiline
-          returnKeyType="done"
-        />
-      </View>
-
-      {/* Apply category to all matching (edit only, category changed) */}
-      {isEdit && (
-        <View style={[styles.card, styles.toggleRow]}>
-          <Text style={styles.toggleLabel}>
-            Always use this category for this merchant
-          </Text>
-          <Switch
-            value={applyToAll}
-            onValueChange={setApplyToAll}
-            trackColor={{ true: theme.colors.accent, false: theme.colors.surfaceAlt }}
-            thumbColor={theme.colors.textPrimary}
-          />
-        </View>
-      )}
-
-      {/* Save button */}
-      <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-        <Text style={styles.saveBtnText}>{isEdit ? 'Save Changes' : 'Add Transaction'}</Text>
-      </TouchableOpacity>
-
-      {/* Delete button (edit only) */}
-      {isEdit && (
-        <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete}>
-          <Text style={styles.deleteBtnText}>Delete Transaction</Text>
-        </TouchableOpacity>
-      )}
-
-      <View style={styles.bottomPad} />
     </ScrollView>
+
+    {/* Sticky save */}
+    <View style={styles.saveBar}>
+      <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
+        <Text style={styles.saveBtnText}>{isEdit ? 'Save' : 'Add transaction'}</Text>
+      </TouchableOpacity>
+    </View>
     </KeyboardAvoidingView>
   );
 }
@@ -662,15 +649,6 @@ const styles = StyleSheet.create({
   },
   segmentTextActive: {
     color: theme.colors.accent,
-  },
-  groupLabel: {
-    fontSize: theme.font.size.xs,
-    fontWeight: theme.font.weight.semibold,
-    color: theme.colors.textMuted,
-    letterSpacing: 1.1,
-    marginTop: theme.spacing.sm,
-    marginBottom: theme.spacing.xs,
-    marginLeft: theme.spacing.md,
   },
   catCard: {
     flexDirection: 'row',
@@ -754,10 +732,6 @@ const styles = StyleSheet.create({
     color: theme.colors.textMuted,
     marginTop: 2,
   },
-  noteInput: {
-    minHeight: 64,
-    textAlignVertical: 'top',
-  },
   dateTimeRow: {
     flexDirection: 'row',
     gap: theme.spacing.sm,
@@ -778,11 +752,6 @@ const styles = StyleSheet.create({
     fontSize: theme.font.size.md,
     color: theme.colors.textPrimary,
     fontWeight: theme.font.weight.medium,
-  },
-  dateShortcuts: {
-    flexDirection: 'row',
-    gap: theme.spacing.sm,
-    marginTop: theme.spacing.sm,
   },
   shortcutBtn: {
     paddingHorizontal: theme.spacing.md,
@@ -808,9 +777,23 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
     marginRight: theme.spacing.md,
   },
+  header: { alignItems: 'center', paddingVertical: theme.spacing.lg },
+  headerAmount: {
+    fontSize: theme.font.size.xxl,
+    fontWeight: theme.font.weight.bold,
+    color: theme.colors.textPrimary,
+  },
+  headerSub: { fontSize: theme.font.size.sm, color: theme.colors.textMuted, marginTop: 2 },
+  actionsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.spacing.lg },
+  actionBtn: { paddingVertical: theme.spacing.xs },
+  rawText: { fontSize: theme.font.size.xs, color: theme.colors.textMuted },
+  saveBar: {
+    padding: theme.spacing.md,
+    backgroundColor: theme.colors.bg,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border,
+  },
   saveBtn: {
-    margin: theme.spacing.lg,
-    marginTop: theme.spacing.xl,
     backgroundColor: theme.colors.accent,
     borderRadius: theme.radius.md,
     padding: theme.spacing.lg,
@@ -833,8 +816,5 @@ const styles = StyleSheet.create({
     color: theme.colors.danger,
     fontSize: theme.font.size.md,
     fontWeight: theme.font.weight.medium,
-  },
-  bottomPad: {
-    height: theme.spacing.xxl,
   },
 });
