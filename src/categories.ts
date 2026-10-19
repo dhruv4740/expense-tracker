@@ -181,19 +181,20 @@ const KEYWORD_MAP: Array<{
       'uber eats', 'ubereats', 'swiggy', 'zomato', 'dominos', 'pizza hut',
       'mcdonald', 'mc donalds', 'mcdonalds', 'kfc', 'starbucks', 'faasos',
       'behrouz', 'eatsure', 'taco bell', 'popeyes', 'jubilant foodworks',
-      'eternal limited', 'district dining', 'dineout',
+      'eternal limited', 'district dining', 'dineout', 'jumbo king',
+      'urban meals',
     ],
     keywords: [
       'restaurant', 'cafe', 'food', 'pizza', 'burger',
       'biryani', 'diner', 'kitchen', 'eatery', 'dhaba', 'canteen', 'bakery',
-      'sweets', 'juice',
+      'sweets', 'juice', 'momo', 'shawarma', 'falahaar',
     ],
     category: 'Food',
   },
   {
     brands: [
       'bigbasket', 'blinkit', 'zepto', 'dmart', 'grofers', 'instamart',
-      'jiomart', 'blink commerce',
+      'jiomart', 'blink commerce', 'rapsap',
     ],
     keywords: [
       'grocery', 'supermarket', 'vegetables', 'fruits', 'general store',
@@ -217,7 +218,7 @@ const KEYWORD_MAP: Array<{
   {
     brands: [
       'irctc', 'rapido', 'redbus', 'fastag', 'olacabs', 'roppen transportation',
-      'indian railways',
+      'indian railways', 'cityflo',
     ],
     keywords: [
       'ola', 'uts', 'fuel', 'petrol', 'diesel', 'metro', 'bus',
@@ -239,6 +240,7 @@ const KEYWORD_MAP: Array<{
       'netflix', 'spotify', 'hotstar', 'prime video', 'bookmyshow', 'pvr',
       'inox', 'youtube', 'disney', 'zee5', 'sonyliv', 'steam',
       'playstation', 'xbox',
+      'district movies',
     ],
     keywords: ['gaming'],
     category: 'Entertainment',
@@ -264,7 +266,7 @@ const KEYWORD_MAP: Array<{
     category: 'Education',
   },
   {
-    brands: ['billdesk', 'tata power', 'adani electricity', 'jio', 'airtel', 'vodafone'],
+    brands: ['billdesk', 'tata power', 'adani electricity', 'jio', 'airtel', 'vodafone', 'reliancejio', 'myjio'],
     keywords: [
       'electricity', 'recharge', 'bill', 'dth', 'broadband',
       'insurance', 'emi', 'loan', 'postpaid', 'prepaid', 'utility', 'gas',

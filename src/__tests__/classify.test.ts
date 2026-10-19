@@ -143,6 +143,9 @@ describe('brand coverage', () => {
     ['Roppen Transportation Services', 'Transport'], ['Indian Railways', 'Transport'],
     ['UTS', 'Transport'], ['Delhi Metro', 'Transport'],
     ['City Chemist', 'Health'], ['MF Utilities India Pvt Ltd', 'Investment'],
+    ['Jumbo King', 'Food'], ['Urban Meals Pvt', 'Food'], ['Darjeeling Momos', 'Food'],
+    ['Rapsap', 'Groceries'], ['Cityflo', 'Transport'], ['District Movies', 'Entertainment'],
+    ['ReliancejIO', 'Bills'], ['MyJio', 'Bills'],
     ['swiggy.com', 'Food'], ['Zomatocom', 'Food'],
   ])('%s -> %s', (m, c) => {
     expect(cat(m)).toBe(c);
