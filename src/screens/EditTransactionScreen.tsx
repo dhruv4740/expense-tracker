@@ -39,6 +39,7 @@ import type { Category } from '../categories';
 import { isGenericMerchantKey, normalizeMerchantKey } from '../categories';
 import { DATA_CHANGED, refreshSyncCaches } from '../sync';
 import { suggestPairs } from '../settle';
+import { promptMarkTransfer } from './markTransfer';
 import { CategoryChip, Icon, SectionHeader } from '../components';
 import { theme } from '../theme';
 
@@ -390,6 +391,15 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
           ))}
         </View>
       </View>
+      {isEdit && tx?.id != null && type !== 'self' && tx.settles_id == null && (
+        <TouchableOpacity
+          style={styles.unlinkBtn}
+          onPress={() => promptMarkTransfer(tx, () => navigation.goBack())}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.unlinkText}>Mark as transfer to self</Text>
+        </TouchableOpacity>
+      )}
 
       {/* Category */}
       <SectionHeader title="Category" />

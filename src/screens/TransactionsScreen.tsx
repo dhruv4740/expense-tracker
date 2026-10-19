@@ -36,6 +36,7 @@ import {
 import type { TransactionRow, TransactionType, TransactionFilters } from '../db';
 import { GROUPED_CATEGORIES } from '../categories';
 import { DATA_CHANGED } from '../sync';
+import { promptMarkTransfer } from './markTransfer';
 import {
   AmountText,
   CategoryChip,
@@ -437,6 +438,14 @@ export default function TransactionsScreen({ navigation }: Props) {
             text: 'Edit',
             onPress: () => navigation.navigate('EditTransaction', { tx: item }),
           },
+          ...(item.type !== 'self' && item.settles_id == null
+            ? [
+                {
+                  text: 'Mark as transfer to self',
+                  onPress: () => promptMarkTransfer(item),
+                },
+              ]
+            : []),
           {
             text: 'Delete',
             style: 'destructive',

@@ -1,5 +1,6 @@
 import {
   classifyPair,
+  findMatchingLeg,
   extractRefs,
   findTransferPairs,
   isThirdPartyLeg,
@@ -196,5 +197,32 @@ describe('legLabel', () => {
   it('prefers a cleaned sender, falls back to the account', () => {
     expect(legLabel(debit({ source: 'AX-HDFCBK-S' }))).toBe('HDFCBK');
     expect(legLabel(debit({ source: null, account: 'XX1111' }))).toBe('a/c 1111');
+  });
+});
+
+describe('findMatchingLeg', () => {
+  it('returns the closest equal-amount opposite leg within 15 minutes', () => {
+    const d = debit();
+    const far = credit({ timestamp: T + 10 * MIN });
+    const near = credit({ timestamp: T + 2 * MIN });
+    expect(findMatchingLeg(d, [far, near])?.id).toBe(near.id);
+  });
+
+  it('ignores wrong amount, same direction, too far, self and linked rows', () => {
+    const d = debit();
+    const pool = [
+      credit({ amount: 751 }),
+      debit({ timestamp: T + MIN }),
+      credit({ timestamp: T + 20 * MIN }),
+      credit({ type: 'self' as never }),
+      credit({ settles_id: 5 }),
+    ];
+    expect(findMatchingLeg(d, pool)).toBeNull();
+  });
+
+  it('works from the credit side too, and tolerates manual rows (user is choosing)', () => {
+    const c = credit();
+    const d = debit({ category_source: 'manual', timestamp: T + MIN });
+    expect(findMatchingLeg(c, [d])?.id).toBe(d.id);
   });
 });

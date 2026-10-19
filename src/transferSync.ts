@@ -27,7 +27,7 @@ import {
   unseenEntries,
 } from './transferLog';
 import type { AutoSelfBatch, AutoSelfEntry } from './transferLog';
-import { findTransferPairs, legLabel, MEDIUM_WINDOW_MS, transferKey } from './transferPair';
+import { findMatchingLeg, findTransferPairs, legLabel, MEDIUM_WINDOW_MS, transferKey } from './transferPair';
 import type { TransferPair, TransferRow } from './transferPair';
 import { pairKey, pickRepaymentBanner } from './settle';
 import type { BannerRow, RepaymentBanner } from './settle';
@@ -169,4 +169,26 @@ export function dismissRepaymentBanner(parentId: number, candidateId: number): v
     REPAY_DISMISSED_KEY,
     addDismissed(getJSON<string[]>(REPAY_DISMISSED_KEY, []), pairKey(parentId, candidateId)),
   );
+}
+
+// ─── Manual "mark as transfer to self" ───────────────────────────────────────
+
+/** The obvious opposite leg (equal amount, ≤15 min) of a row, if any. */
+export function findOppositeLeg(row: TransactionRow): TransactionRow | null {
+  if (row.id == null || row.type === 'self') {
+    return null;
+  }
+  const near = getTransactionsBetween(
+    row.timestamp - MEDIUM_WINDOW_MS,
+    row.timestamp + MEDIUM_WINDOW_MS,
+  );
+  const leg = findMatchingLeg({ ...row, id: row.id } as TransferRow, toTransferRows(near));
+  return leg ? near.find(r => r.id === leg.id) ?? null : null;
+}
+
+/** Set rows to type 'self'. */
+export function markAsSelf(ids: number[]): void {
+  for (const id of ids) {
+    updateTransaction(id, { type: 'self' });
+  }
 }

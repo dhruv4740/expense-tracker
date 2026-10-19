@@ -269,3 +269,27 @@ export function legLabel(r: TransferRow): string {
   const a = acctKey(r.account);
   return src || (a ? `a/c ${a}` : 'account');
 }
+
+/**
+ * The obvious opposite leg of `row` for a MANUAL "mark as transfer": equal
+ * amount, opposite direction, within 15 min, unlinked and not already self.
+ * Closest in time wins; null when there is none.
+ */
+export function findMatchingLeg(row: TransferRow, pool: TransferRow[]): TransferRow | null {
+  let best: TransferRow | null = null;
+  let bestDt = Infinity;
+  for (const o of pool) {
+    if (o.id === row.id || !eligible(o) || o.type === row.type || o.type === 'self') {
+      continue;
+    }
+    if (Math.abs(o.amount - row.amount) > AMOUNT_EPSILON) {
+      continue;
+    }
+    const dt = Math.abs(o.timestamp - row.timestamp);
+    if (dt <= MEDIUM_WINDOW_MS && dt < bestDt) {
+      best = o;
+      bestDt = dt;
+    }
+  }
+  return best;
+}
