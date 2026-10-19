@@ -30,7 +30,7 @@ import type { Category } from '../categories';
 import { CATEGORY_META } from '../categories';
 import { isGenericMerchantKey, normalizeMerchantKey } from '../categories';
 import { DATA_CHANGED } from '../sync';
-import { AmountText, Card, EmptyState, SectionHeader } from '../components';
+import { AmountText, EmptyState, SectionHeader } from '../components';
 import { theme } from '../theme';
 import { formatDate } from '../dates';
 
