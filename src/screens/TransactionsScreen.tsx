@@ -101,6 +101,11 @@ const TxRow = React.memo(function TxRow({
         </View>
         <Text style={styles.rowSub} numberOfLines={1}>
           {formatDate(item.timestamp)}
+          {item.paid_back != null && item.paid_back > 0
+            ? item.paid_back >= item.amount
+              ? '  ·  ↺ settled'
+              : `  ·  net ₹${Math.round((item.amount - item.paid_back) * 100) / 100}`
+            : ''}
         </Text>
       </View>
       <AmountText amount={item.amount} type={item.type} size={theme.font.size.md} />

@@ -34,6 +34,11 @@ export interface TransactionRow {
   settles_id?: number | null;
   /** On a split expense: how much the user expects to be paid back. */
   owed_amount?: number | null;
+  /**
+   * Read-only, set by queryTransactions: total of opposite-direction rows linked
+   * to this one via settles_id (see NETTING_JOIN). Undefined/0 when none.
+   */
+  paid_back?: number;
 }
 
 export interface Range {
@@ -510,7 +515,33 @@ export function queryTransactions(
     ' ORDER BY timestamp DESC';
 
   const res = conn.executeSync(sql, params);
-  return (res.rows ?? []).map(mapRow);
+  const rows = (res.rows ?? []).map(mapRow);
+  const paid = getPaidBackByParent();
+  for (const r of rows) {
+    const p = r.id != null ? paid.get(r.id) : undefined;
+    if (p) {
+      r.paid_back = p;
+    }
+  }
+  return rows;
+}
+
+/** parent id -> total of opposite-direction rows linked to it. */
+export function getPaidBackByParent(): Map<number, number> {
+  const conn = requireDb();
+  const res = conn.executeSync(
+    `SELECT c.settles_id AS pid, SUM(c.amount) AS paid
+       FROM transactions c
+       JOIN transactions p ON p.id = c.settles_id
+      WHERE c.type IN ('expense', 'income') AND p.type IN ('expense', 'income')
+        AND c.type != p.type
+      GROUP BY c.settles_id`,
+  );
+  const out = new Map<number, number>();
+  for (const r of res.rows ?? []) {
+    out.set(Number(r.pid), Number(r.paid ?? 0));
+  }
+  return out;
 }
 
 // ─── aggregation (in SQL — never .map over all rows) ──────────────────────────
@@ -760,6 +791,61 @@ export function getUnsettledRides(range: Range): UnsettledRide[] {
  */
 export function setSettlement(id: number, settlesId: number | null): boolean {
   return updateTransaction(id, { settles_id: settlesId });
+}
+
+/** Rows linked to `id` (its settlers) and, if `id` itself settles one, that parent. */
+export function getSettlementLinks(id: number): {
+  children: TransactionRow[];
+  parent: TransactionRow | null;
+} {
+  const conn = requireDb();
+  const kids = conn.executeSync(
+    'SELECT * FROM transactions WHERE settles_id = ? ORDER BY timestamp ASC',
+    [id],
+  );
+  const me = conn.executeSync(
+    'SELECT settles_id FROM transactions WHERE id = ? LIMIT 1',
+    [id],
+  );
+  const pid = (me.rows ?? [])[0]?.settles_id;
+  let parent: TransactionRow | null = null;
+  if (pid != null) {
+    const pr = conn.executeSync('SELECT * FROM transactions WHERE id = ? LIMIT 1', [Number(pid)]);
+    const row = (pr.rows ?? [])[0];
+    parent = row ? mapRow(row) : null;
+  }
+  return { children: (kids.rows ?? []).map(mapRow), parent };
+}
+
+/**
+ * Candidate rows that could cancel `parent`: opposite direction, unlinked, not
+ * self/Investment, not themselves a parent of something, and within the
+ * settle.ts window (12h before to 30 days after). Scoring happens in
+ * settle.suggestPairs; this only narrows the set in SQL.
+ */
+export function getPairCandidates(parent: {
+  id: number;
+  type: 'expense' | 'income';
+  timestamp: number;
+}): TransactionRow[] {
+  const conn = requireDb();
+  const res = conn.executeSync(
+    `SELECT * FROM transactions c
+      WHERE c.type = ? AND c.id != ?
+        AND c.settles_id IS NULL
+        AND c.category != 'Investment'
+        AND c.timestamp BETWEEN ? AND ?
+        AND NOT EXISTS (SELECT 1 FROM transactions x WHERE x.settles_id = c.id)
+      ORDER BY c.timestamp ASC
+      LIMIT 300`,
+    [
+      parent.type === 'expense' ? 'income' : 'expense',
+      parent.id,
+      parent.timestamp - 12 * 3600_000,
+      parent.timestamp + 30 * 86_400_000,
+    ],
+  );
+  return (res.rows ?? []).map(mapRow);
 }
 
 /**

@@ -3,11 +3,12 @@
 // ADD (tx param absent) or EDIT (tx param present) a transaction.
 // After save/delete: emits DATA_CHANGED and navigation.goBack().
 
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   DeviceEventEmitter,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -28,12 +29,15 @@ import {
   queryTransactions,
   upsertMerchantRule,
   setSettlement,
+  getSettlementLinks,
+  getPairCandidates,
 } from '../db';
 import type { TransactionRow, TransactionType } from '../db';
 import { GROUPED_CATEGORIES } from '../categories';
 import type { Category } from '../categories';
 import { isGenericMerchantKey, normalizeMerchantKey } from '../categories';
 import { DATA_CHANGED, refreshSyncCaches } from '../sync';
+import { suggestPairs } from '../settle';
 import { CategoryChip, Icon, SectionHeader } from '../components';
 import { theme } from '../theme';
 
@@ -69,6 +73,14 @@ function formatTime(ts: number): string {
   });
 }
 
+function rupees(n: number): string {
+  return `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+}
+
+function whoIs(r: { counterparty?: string | null; merchant?: string | null; source?: string | null }): string {
+  return r.counterparty ?? r.merchant ?? r.source ?? 'someone';
+}
+
 // ─── Screen ──────────────────────────────────────────────────────────────────
 
 export default function EditTransactionScreen({ route, navigation }: Props) {
@@ -82,6 +94,60 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
   const [note, setNote] = useState(tx?.note ?? '');
   const [timestamp, setTimestamp] = useState(tx?.timestamp ?? Date.now());
   const [applyToAll, setApplyToAll] = useState(false);
+
+  // Pair-to-cancel links: rows that settle this one, or the row this one settles.
+  const [linkTick, setLinkTick] = useState(0);
+  const [showPairs, setShowPairs] = useState(false);
+  const links = useMemo(
+    () =>
+      isEdit && tx?.id != null
+        ? getSettlementLinks(tx.id)
+        : { children: [] as TransactionRow[], parent: null as TransactionRow | null },
+    // linkTick forces a re-read after a link/unlink
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isEdit, tx?.id, linkTick],
+  );
+  const pairable = isEdit && tx?.id != null && tx.settles_id == null && tx.type !== 'self';
+  const paidSoFar = links.children
+    .filter(c => c.type !== tx?.type)
+    .reduce((a, c) => a + c.amount, 0);
+  const pairSuggestions = useMemo(() => {
+    if (!showPairs || !pairable || tx?.id == null) {
+      return [];
+    }
+    const t = tx.type as 'expense' | 'income';
+    return suggestPairs(
+      {
+        id: tx.id,
+        type: t,
+        amount: tx.amount,
+        timestamp: tx.timestamp,
+        counterparty: tx.counterparty,
+        merchant: tx.merchant,
+        alreadyPaid: paidSoFar,
+      },
+      getPairCandidates({ id: tx.id, type: t, timestamp: tx.timestamp }),
+    );
+  }, [showPairs, pairable, tx, paidSoFar]);
+
+  function linkPair(childId: number | undefined) {
+    if (childId == null || tx?.id == null) {
+      return;
+    }
+    setSettlement(childId, tx.id);
+    DeviceEventEmitter.emit(DATA_CHANGED);
+    setShowPairs(false);
+    setLinkTick(n => n + 1);
+  }
+
+  function unlinkPair(childId: number | undefined) {
+    if (childId == null) {
+      return;
+    }
+    setSettlement(childId, null);
+    DeviceEventEmitter.emit(DATA_CHANGED);
+    setLinkTick(n => n + 1);
+  }
 
   // Keyboard-safe scrolling (6a): the Note field can sit near the bottom of
   // the form and nothing lifted the screen above the keyboard, so the user
@@ -376,8 +442,11 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
           <SectionHeader title="Settlement" />
           <View style={styles.card}>
             <Text style={styles.settlementText}>
-              This payment is linked to another transaction, so it isn’t counted
-              as separate spending.
+              {links.parent
+                ? `Cancels ${rupees(tx.amount)} ${
+                    tx.type === 'income' ? 'payment to' : 'received from'
+                  } ${whoIs(links.parent)}`
+                : 'This payment is linked to another transaction, so it isn’t counted as separate spending.'}
             </Text>
             <TouchableOpacity
               style={styles.unlinkBtn}
@@ -395,6 +464,69 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
           </View>
         </>
       )}
+
+      {/* Pair-to-cancel: repayments that net against this row. */}
+      {pairable && (
+        <>
+          <SectionHeader title="Repayments" />
+          <View style={styles.card}>
+            {links.children.map(c => (
+              <View key={c.id} style={styles.pairRow}>
+                <Text style={[styles.settlementText, styles.pairText]}>
+                  {c.type !== tx?.type ? 'Paid back' : 'Linked'} {rupees(c.amount)} by {whoIs(c)}
+                </Text>
+                <TouchableOpacity onPress={() => unlinkPair(c.id)}>
+                  <Text style={styles.unlinkText}>Unlink</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+            <TouchableOpacity
+              style={styles.unlinkBtn}
+              onPress={() => setShowPairs(true)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.unlinkText}>Cancel out with a repayment</Text>
+            </TouchableOpacity>
+          </View>
+        </>
+      )}
+
+      <Modal
+        visible={showPairs}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowPairs(false)}
+      >
+        <View style={styles.pairOverlay}>
+          <View style={styles.pairSheet}>
+            <Text style={styles.pairTitle}>Cancel out with…</Text>
+            {pairSuggestions.length === 0 ? (
+              <Text style={styles.settlementText}>
+                No matching {tx?.type === 'income' ? 'debit' : 'credit'} found within 30 days.
+              </Text>
+            ) : (
+              pairSuggestions.map(sug => (
+                <TouchableOpacity
+                  key={sug.candidate.id}
+                  style={styles.pairCand}
+                  onPress={() => linkPair(sug.candidate.id)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.pairCandMain}>
+                    {rupees(sug.candidate.amount)} · {whoIs(sug.candidate)}
+                  </Text>
+                  <Text style={styles.pairCandSub}>
+                    {formatDate(sug.candidate.timestamp)} · {sug.reason}
+                  </Text>
+                </TouchableOpacity>
+              ))
+            )}
+            <TouchableOpacity style={styles.unlinkBtn} onPress={() => setShowPairs(false)}>
+              <Text style={styles.unlinkText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* Note */}
       <SectionHeader title="Note (optional)" />
@@ -537,6 +669,48 @@ const styles = StyleSheet.create({
     fontSize: theme.font.size.sm,
     fontWeight: theme.font.weight.semibold,
     color: theme.colors.accent,
+  },
+  pairRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  pairText: {
+    flex: 1,
+    marginRight: theme.spacing.md,
+  },
+  pairOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'flex-end',
+  },
+  pairSheet: {
+    backgroundColor: theme.colors.surface,
+    borderTopLeftRadius: theme.radius.lg,
+    borderTopRightRadius: theme.radius.lg,
+    padding: theme.spacing.lg,
+    paddingBottom: 40,
+  },
+  pairTitle: {
+    fontSize: theme.font.size.lg,
+    fontWeight: theme.font.weight.bold,
+    color: theme.colors.textPrimary,
+    marginBottom: theme.spacing.md,
+  },
+  pairCand: {
+    paddingVertical: theme.spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+  },
+  pairCandMain: {
+    fontSize: theme.font.size.md,
+    color: theme.colors.textPrimary,
+    fontWeight: theme.font.weight.medium,
+  },
+  pairCandSub: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textMuted,
+    marginTop: 2,
   },
   noteInput: {
     minHeight: 64,
