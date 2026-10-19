@@ -66,6 +66,7 @@ interface FilterState {
 
 interface Props {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Tabs'>;
+  route?: { params?: { category?: string; datePreset?: 'month' | 'lastmonth'; nonce?: number } };
 }
 
 // ─── Row component (memoised for SectionList perf) ────────────────────────────
@@ -374,8 +375,22 @@ const DEFAULT_FILTER: FilterState = {
 
 // ─── Screen ──────────────────────────────────────────────────────────────────
 
-export default function TransactionsScreen({ navigation }: Props) {
+export default function TransactionsScreen({ navigation, route }: Props) {
   const [filter, setFilter] = useState<FilterState>(DEFAULT_FILTER);
+
+  // Dashboard → category tap: open pre-filtered to that category and month.
+  const routeCategory = route?.params?.category;
+  const routePreset = route?.params?.datePreset;
+  const routeNonce = route?.params?.nonce;
+  useEffect(() => {
+    if (routeCategory) {
+      setFilter(f => ({
+        ...f,
+        selectedCategories: [routeCategory],
+        datePreset: routePreset ?? 'month',
+      }));
+    }
+  }, [routeCategory, routePreset, routeNonce]);
   const [sections, setSections] = useState<Section[]>([]);
   const [showFilter, setShowFilter] = useState(false);
   const [refreshing, setRefreshing] = useState(false);

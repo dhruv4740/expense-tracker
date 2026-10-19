@@ -37,3 +37,6 @@ export type { TrendChartProps, TrendPoint } from './charts/TrendChart';
 
 export { default as BarsChart } from './charts/BarsChart';
 export type { BarsChartProps, BarItem } from './charts/BarsChart';
+
+export { default as MonthSwitcher, monthRef } from './MonthSwitcher';
+export type { MonthSwitcherProps } from './MonthSwitcher';

@@ -1,4 +1,4 @@
-import { netSummary, netUber, paidBack } from '../netting';
+import { netSummary, netUber, outOfPocket, paidBack } from '../netting';
 import type { NetRow } from '../netting';
 
 const NON_SPEND = ['Investment', 'Friend Transfer', 'Loan/Dues'];
@@ -91,5 +91,37 @@ describe('netting: legacy same-direction Uber links', () => {
   it('an opposite-direction link is not double counted', () => {
     const r = [row(1, 'expense', 300, 'Uber'), row(2, 'income', 100, 'Friend Transfer', 1)];
     expect(netUber(r, range).reimbursed).toBe(100);
+  });
+});
+
+describe('netting: Dashboard hero figures', () => {
+  it('splits received into family and earned, and computes out of pocket', () => {
+    const rows = [
+      row(1, 'expense', 1000, 'Food'),
+      row(2, 'expense', 500, 'Shopping'),
+      row(3, 'income', 700, 'Family'),
+      row(4, 'income', 300, 'Income'),
+      row(5, 'self', 9999, 'Other'),
+      row(6, 'income', 200, 'Loan/Dues'), // non-spend: in neither figure
+    ];
+    const s = sum(rows);
+    expect(s.spent).toBe(1500);
+    expect(s.fromFamily).toBe(700);
+    expect(s.earned).toBe(300);
+    expect(s.fromFamily + s.earned).toBe(s.received);
+    expect(outOfPocket(s.spent, s.fromFamily)).toBe(800);
+  });
+
+  it('nets a family credit that is partly paid back, ignores settling rows', () => {
+    const rows = [
+      row(1, 'income', 1000, 'Family'),
+      row(2, 'expense', 400, 'Family', 1), // returns part of the credit
+      row(3, 'expense', 100, 'Food'),
+    ];
+    expect(sum(rows).fromFamily).toBe(600);
+  });
+
+  it('out of pocket never goes negative', () => {
+    expect(outOfPocket(300, 1000)).toBe(0);
   });
 });

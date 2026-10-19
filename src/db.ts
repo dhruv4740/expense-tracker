@@ -53,6 +53,10 @@ export interface Summary {
   /** Sum of expense-type Investment-category transactions in the range —
    * tracked separately since SIPs/mutual funds aren't "spending". */
   invested: number;
+  /** Family-category income in the range (netted like `received`). */
+  fromFamily: number;
+  /** `received` without Family credits: salary, refunds, interest, etc. */
+  earned: number;
   /**
    * Net money moved to/from other people (Friend Transfer, Loan/Dues) in the
    * range: positive = you paid out more than you got back. Excluded from
@@ -587,6 +591,10 @@ export function getSummary(range: Range): Summary {
                           THEN ${EFFECTIVE_AMOUNT} END), 0) AS received,
         COALESCE(SUM(CASE WHEN t.type = 'expense' AND t.category = ?
                           THEN t.amount END), 0) AS invested,
+        COALESCE(SUM(CASE WHEN t.type = 'income'
+                           AND t.settles_id IS NULL
+                           AND t.category = 'Family'
+                          THEN ${EFFECTIVE_AMOUNT} END), 0) AS fromFamily,
         COALESCE(SUM(CASE WHEN t.category IN (${TRANSFER_CATEGORIES.map(() => '?').join(', ')})
                            AND t.type IN ('expense', 'income')
                           THEN CASE WHEN t.type = 'expense' THEN t.amount ELSE -t.amount END
@@ -605,6 +613,7 @@ export function getSummary(range: Range): Summary {
   const totRow = (totalsRes.rows ?? [])[0] ?? {};
   const received = Number(totRow.received ?? 0);
   const invested = Number(totRow.invested ?? 0);
+  const fromFamily = Number(totRow.fromFamily ?? 0);
   const transferred = Number(totRow.transferred ?? 0);
 
   // Nets income against expense within the same category (e.g. a debit and a
@@ -675,6 +684,8 @@ export function getSummary(range: Range): Summary {
     received,
     net: received - spent,
     invested,
+    fromFamily,
+    earned: Math.max(received - fromFamily, 0),
     transferred,
     byCategory,
     byDay,

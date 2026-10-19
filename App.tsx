@@ -13,6 +13,7 @@ import React, { useEffect } from 'react';
 import { Alert, AppState, PermissionsAndroid, StatusBar } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
+import type { NavigatorScreenParams } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { enableScreens } from 'react-native-screens';
@@ -48,16 +49,16 @@ runCleanupIfNeeded();
 // ── Navigation types ─────────────────────────────────────────────────────────
 
 export type RootStackParamList = {
-  Tabs: undefined;
+  Tabs: NavigatorScreenParams<RootTabParamList> | undefined;
   EditTransaction: { tx?: TransactionRow };
   Review: undefined;
   MerchantRules: undefined;
   Uber: undefined;
 };
 
-type RootTabParamList = {
+export type RootTabParamList = {
   Dashboard: undefined;
-  Transactions: undefined;
+  Transactions: { category?: string; datePreset?: 'month' | 'lastmonth'; nonce?: number } | undefined;
   Insights: undefined;
   Settings: undefined;
 };

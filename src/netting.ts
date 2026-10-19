@@ -46,7 +46,16 @@ export function effectiveAmount(amount: number, paid: number): number {
 export interface NetSummary {
   spent: number;
   received: number;
+  /** Family-category income (netted). */
+  fromFamily: number;
+  /** received minus fromFamily. */
+  earned: number;
   byCategory: { category: string; total: number }[];
+}
+
+/** Dashboard hero: what Spent cost after family money covered part of it. */
+export function outOfPocket(spent: number, fromFamily: number): number {
+  return Math.max(spent - fromFamily, 0);
 }
 
 /** Mirrors getSummary's received / byCategory / spent. */
@@ -58,6 +67,7 @@ export function netSummary(
   const paid = paidBack(rows);
   const eff = (r: NetRow) => effectiveAmount(r.amount, paid.get(r.id)?.paid ?? 0);
   let received = 0;
+  let fromFamily = 0;
   const cats = new Map<string, number>();
   for (const r of rows) {
     if (
@@ -71,6 +81,9 @@ export function netSummary(
     }
     if (r.type === 'income') {
       received += eff(r);
+      if (r.category === 'Family') {
+        fromFamily += eff(r);
+      }
     }
     cats.set(r.category, (cats.get(r.category) ?? 0) + (r.type === 'expense' ? eff(r) : -eff(r)));
   }
@@ -78,7 +91,7 @@ export function netSummary(
     .map(([category, total]) => ({ category, total }))
     .sort((a, b) => b.total - a.total);
   const spent = byCategory.reduce((s, c) => (c.total > 0 ? s + c.total : s), 0);
-  return { spent, received, byCategory };
+  return { spent, received, fromFamily, earned: Math.max(received - fromFamily, 0), byCategory };
 }
 
 /** Mirrors getUberSummary's spent / reimbursed / net. */

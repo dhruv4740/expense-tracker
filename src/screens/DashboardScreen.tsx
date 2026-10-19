@@ -1,7 +1,9 @@
 // ─── DashboardScreen ─────────────────────────────────────────────────────────
 //
-// Home tab: current-month summary hero, spend trend, category donut, budgets,
-// and quick insights (top merchant + biggest expense).
+// Home tab, kept deliberately short: month switcher, one hero card (Spent +
+// From family / Out of pocket / Earned), at most two action banners, the
+// By Category donut (tap a category → Transactions filtered to it), a compact
+// Uber row and any budget at ≥80%. Trends and insights live on Insights.
 //
 // Reload triggers: useFocusEffect + DeviceEventEmitter DATA_CHANGED.
 
@@ -22,27 +24,20 @@ import { isNotificationAccessGranted, openNotificationAccessSettings } from '../
 import {
   getSummary,
   getUberSummary,
-  getTopMerchants,
+  getUnsettledRides,
   hasCategoryRows,
-  queryTransactions,
   getUncategorizedCount,
 } from '../db';
-import type { Summary, TransactionRow, UberSummary } from '../db';
+import type { Summary, UberSummary } from '../db';
 import { CATEGORY_META, CATEGORIES } from '../categories';
 import type { Category } from '../categories';
 import { DATA_CHANGED } from '../sync';
-import {
-  AmountText,
-  Card,
-  Donut,
-  Icon,
-  ProgressBar,
-  SectionHeader,
-  TrendChart,
-} from '../components';
+import { AmountText, Card, Donut, Icon, MonthSwitcher, ProgressBar, SectionHeader } from '../components';
+import { monthRef } from '../components/MonthSwitcher';
 import { theme } from '../theme';
-import { monthRange, prevMonthRange, localDayIndexToDate, completedDays, formatDayLabel } from '../dates';
+import { monthRange } from '../dates';
 import { computeBudgetStatus } from '../budgets';
+import { outOfPocket } from '../netting';
 import DashboardBanners from './DashboardBanners';
 import type { BudgetStatus } from '../budgets';
 
@@ -50,89 +45,71 @@ import type { BudgetStatus } from '../budgets';
 
 interface DashboardData {
   summary: Summary;
-  prevSummary: Summary;
-  topMerchant: { merchant: string; total: number; count: number } | null;
-  biggestExpense: TransactionRow | null;
   budgetStatus: BudgetStatus;
-  monthLabel: string;
   uncategorizedCount: number;
-  /** This-month Uber spend net of reimbursements — same figure the Uber
-   * screen shows, computed from the same shared query. */
+  /** Net Uber spend for the month — same figure the Uber screen shows. */
   uberSummary: UberSummary;
-  /** Any Uber-tagged row ever — keeps the card (the only door to the Uber
-   * screen and its split calculator) visible in months with no rides yet. */
+  /** Rides with money still owed back. */
+  uberWaiting: number;
+  /** Any Uber-tagged row ever — keeps the row (the only door to the Uber
+   * screen) visible in months with no rides yet. */
   uberEverUsed: boolean;
 }
 
+const BUDGET_WARN = 0.8;
+
 // ─── Data loader ──────────────────────────────────────────────────────────────
 
-function loadData(): DashboardData {
-  const now = new Date();
-  const range = monthRange();
-  const summary = getSummary(range);
-  const prevSummary = getSummary(prevMonthRange());
-
-  const topMerchants = getTopMerchants(range, 1);
-  const topMerchant = topMerchants[0] ?? null;
-
-  const expenses = queryTransactions({ from: range.from, to: range.to, types: ['expense'] });
-  const biggestExpense =
-    expenses.length > 0
-      ? expenses.reduce((max, tx) => (tx.amount > max.amount ? tx : max), expenses[0])
-      : null;
-
-  const budgetStatus = computeBudgetStatus();
-  const uncategorizedCount = getUncategorizedCount();
-
-  const uberSummary = getUberSummary(range);
-  const uberEverUsed = hasCategoryRows('Uber');
-
-  const monthLabel = now.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
-
+function loadData(offset: number): DashboardData {
+  const ref = monthRef(offset);
+  const range = monthRange(ref);
   return {
-    summary,
-    prevSummary,
-    topMerchant,
-    biggestExpense,
-    budgetStatus,
-    monthLabel,
-    uncategorizedCount,
-    uberSummary,
-    uberEverUsed,
+    summary: getSummary(range),
+    budgetStatus: computeBudgetStatus(ref),
+    uncategorizedCount: getUncategorizedCount(),
+    uberSummary: getUberSummary(range),
+    uberWaiting: getUnsettledRides(range).length,
+    uberEverUsed: hasCategoryRows('Uber'),
   };
+}
+
+function rupees(n: number): string {
+  return `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+}
+
+function catColor(category: string): string {
+  return (CATEGORIES as string[]).includes(category)
+    ? CATEGORY_META[category as Category].color
+    : '#78909C';
+}
+
+function Figure({ label, amount }: { label: string; amount: number }) {
+  return (
+    <View style={styles.figure}>
+      <Text style={styles.figureLabel}>{label}</Text>
+      <Text style={styles.figureValue}>{rupees(amount)}</Text>
+    </View>
+  );
 }
 
 // ─── Screen ──────────────────────────────────────────────────────────────────
 
 export default function DashboardScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const [data, setData] = useState<DashboardData>(() => loadData());
+  const [offset, setOffset] = useState(0);
+  const [data, setData] = useState<DashboardData>(() => loadData(0));
   const [refreshing, setRefreshing] = useState(false);
   const [notifHealthOk, setNotifHealthOk] = useState(true);
 
-  // View-only category exclude toggle (6d) — non-persistent, screen-local.
-  const [excluded, setExcluded] = useState<Set<Category>>(new Set());
-  const toggleExcluded = useCallback((cat: Category) => {
-    setExcluded(prev => {
-      const next = new Set(prev);
-      if (next.has(cat)) {
-        next.delete(cat);
-      } else {
-        next.add(cat);
-      }
-      return next;
-    });
-  }, []);
-
   const reload = useCallback(() => {
-    setData(loadData());
-  }, []);
+    setData(loadData(offset));
+  }, [offset]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    setData(loadData());
+    reload();
     setRefreshing(false);
-  }, []);
+  }, [reload]);
 
   useFocusEffect(reload);
 
@@ -149,72 +126,34 @@ export default function DashboardScreen() {
     return () => sub.remove();
   }, [reload]);
 
-  const {
-    summary,
-    prevSummary,
-    topMerchant,
-    biggestExpense,
-    budgetStatus,
-    monthLabel,
-    uncategorizedCount,
-    uberSummary,
-    uberEverUsed,
-  } = data;
+  const { summary, budgetStatus, uncategorizedCount, uberSummary, uberWaiting, uberEverUsed } = data;
 
-  // ── Month-over-month deltas ────────────────────────────────────────────────
-  // spentDelta is computed below displayedSpent (uses the excluded-categories
-  // view so it never silently disagrees with the number shown on screen).
-  const receivedDelta = prevSummary.received > 0
-    ? ((summary.received - prevSummary.received) / prevSummary.received) * 100
-    : null;
-
-  // ── Category exclude toggle (6d): displayed totals drop excluded categories
-  // from the total, donut, and per-day figure. View-only — no data changes.
-  const excludedTotal = summary.byCategory
-    .filter(bc => excluded.has(bc.category as Category))
-    .reduce((sum, bc) => sum + bc.total, 0);
-  const displayedSpent = summary.spent - excludedTotal;
-  const spentDelta = prevSummary.spent > 0
-    ? ((displayedSpent - prevSummary.spent) / prevSummary.spent) * 100
-    : null;
-
-  // ── Donut data ──────────────────────────────────────────────────────────────
-  const donutData = summary.byCategory
-    .filter(bc => bc.total > 0 && !excluded.has(bc.category as Category))
-    .map(bc => ({
-      value: bc.total,
-      color: (CATEGORIES as string[]).includes(bc.category)
-        ? CATEGORY_META[bc.category as Category].color
-        : '#78909C',
-      label: bc.category,
-    }));
-
-  const totalSpentFormatted = displayedSpent.toLocaleString('en-IN', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  });
-
-  // ── Per-day spend (6c) ──────────────────────────────────────────────────────
-  const monthCompletedDays = completedDays(monthRange());
-  const perDayFormatted =
-    monthCompletedDays > 0
-      ? `₹${Math.round(displayedSpent / monthCompletedDays).toLocaleString('en-IN')}/day`
-      : '—';
-
-  // ── Trend data ──────────────────────────────────────────────────────────────
-  const trendData = summary.byDay.map(bd => ({
-    value: bd.total,
-    label: String(localDayIndexToDate(bd.day).getDate()),
-    date: formatDayLabel(localDayIndexToDate(bd.day).getTime()),
+  const cats = summary.byCategory.filter(bc => bc.total > 0);
+  const donutData = cats.map(bc => ({
+    value: bc.total,
+    color: catColor(bc.category),
+    label: bc.category,
   }));
 
-  // ── Over-budget check ───────────────────────────────────────────────────────
-  const overallOver =
-    budgetStatus.overall != null &&
-    budgetStatus.overall.spent > budgetStatus.overall.limit;
-  const anyOver =
-    overallOver ||
-    budgetStatus.categories.some(c => c.spent > c.limit);
+  const openCategory = (category: string) =>
+    navigation.navigate('Tabs', {
+      screen: 'Transactions',
+      params: {
+        category,
+        datePreset: offset === 0 ? 'month' : 'lastmonth',
+        nonce: Date.now(),
+      },
+    });
+
+  // Budgets at ≥80% only, one compact line each.
+  const hot: { label: string; spent: number; limit: number }[] = [];
+  if (budgetStatus.overall != null) {
+    hot.push({ label: 'Overall', ...budgetStatus.overall });
+  }
+  for (const cb of budgetStatus.categories) {
+    hot.push({ label: cb.category, spent: cb.spent, limit: cb.limit });
+  }
+  const hotBudgets = hot.filter(b => b.spent >= b.limit * BUDGET_WARN);
 
   return (
     <ScrollView
@@ -230,6 +169,8 @@ export default function DashboardScreen() {
         />
       }
     >
+      <MonthSwitcher offset={offset} onChange={setOffset} />
+
       {/* ── Capture-health banner ── */}
       {!notifHealthOk && (
         <TouchableOpacity
@@ -244,7 +185,7 @@ export default function DashboardScreen() {
         </TouchableOpacity>
       )}
 
-      {/* ── Transfer / repayment banners ── */}
+      {/* ── Transfer / repayment banners (max 2) ── */}
       <DashboardBanners />
 
       {/* ── Uncategorized review banner ── */}
@@ -263,240 +204,90 @@ export default function DashboardScreen() {
 
       {/* ── Hero card ── */}
       <Card style={styles.heroCard}>
-        <Text style={styles.heroTitle}>{monthLabel}</Text>
-        <View style={styles.heroRow}>
-          <View style={styles.heroItem}>
-            <Text style={styles.heroLabel}>Spent</Text>
-            <AmountText amount={displayedSpent} type="expense" size={theme.font.size.xl} />
-            {spentDelta != null && (
-              <Text style={[styles.delta, spentDelta > 0 ? styles.deltaUp : styles.deltaDown]}>
-                {spentDelta > 0 ? '▲' : '▼'} {Math.abs(spentDelta).toFixed(0)}% vs last mo
-              </Text>
-            )}
-            <Text style={styles.perDay}>{perDayFormatted}</Text>
-          </View>
-          <View style={styles.heroSep} />
-          <View style={styles.heroItem}>
-            <Text style={styles.heroLabel}>Received</Text>
-            <AmountText amount={summary.received} type="income" size={theme.font.size.xl} />
-            {receivedDelta != null && (
-              <Text style={[styles.delta, receivedDelta >= 0 ? styles.deltaDown : styles.deltaUp]}>
-                {receivedDelta >= 0 ? '▲' : '▼'} {Math.abs(receivedDelta).toFixed(0)}% vs last mo
-              </Text>
-            )}
-          </View>
-          <View style={styles.heroSep} />
-          <View style={styles.heroItem}>
-            <Text style={styles.heroLabel}>Net</Text>
-            <AmountText
-              amount={Math.abs(summary.net)}
-              type={summary.net >= 0 ? 'income' : 'expense'}
-              size={theme.font.size.xl}
-            />
-          </View>
+        <Text style={styles.heroLabel}>Spent</Text>
+        <AmountText amount={summary.spent} type="expense" size={theme.font.size.xxl} />
+        <View style={styles.figures}>
+          <Figure label="From family" amount={summary.fromFamily} />
+          <Figure label="Out of pocket" amount={outOfPocket(summary.spent, summary.fromFamily)} />
+          <Figure label="Earned" amount={summary.earned} />
+          {summary.invested > 0 && <Figure label="Invested" amount={summary.invested} />}
         </View>
-        {summary.invested > 0 && (
-          <Text style={styles.investedCaption}>
-            Invested: ₹{summary.invested.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-            {' '}(not counted as spend)
-          </Text>
-        )}
-        {/* Transfers are excluded from spend and income (the underlying
-            expense is the real cost), so surface the figure here rather than
-            letting the money disappear from the app entirely. */}
-        {Math.abs(summary.transferred) > 0 && (
-          <Text style={styles.investedCaption}>
-            {summary.transferred > 0 ? 'Lent/paid out' : 'Received back'}: ₹
-            {Math.abs(summary.transferred).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-            {' '}(not counted as spend)
-          </Text>
-        )}
       </Card>
 
-      {/* ── Spend trend ── */}
-      <SectionHeader title="Daily Spend" />
-      <Card>
-        <TrendChart data={trendData} color={theme.colors.accent} height={160} />
-      </Card>
-
-      {/* ── Category donut ── */}
-      <SectionHeader title="By Category" />
-      <Card style={styles.donutCard}>
-        <Donut
-          data={donutData}
-          centerValue={`₹${totalSpentFormatted}`}
-          centerLabel="spent"
-          size={200}
-        />
-        {/* Legend — tap a category to hide it from total/donut/per-day (6d) */}
-        {summary.byCategory.filter(bc => bc.total > 0).length > 0 && (
-          <View style={styles.legend}>
-            {summary.byCategory.filter(bc => bc.total > 0).map(bc => {
-              const isExcluded = excluded.has(bc.category as Category);
-              const color = (CATEGORIES as string[]).includes(bc.category)
-                ? CATEGORY_META[bc.category as Category].color
-                : '#78909C';
-              return (
+      {/* ── By category: tap a row to see its transactions ── */}
+      {cats.length > 0 && (
+        <>
+          <SectionHeader title="By Category" />
+          <Card style={styles.donutCard}>
+            <Donut
+              data={donutData}
+              centerValue={rupees(summary.spent)}
+              centerLabel="spent"
+              size={170}
+            />
+            <View style={styles.legend}>
+              {cats.map(bc => (
                 <TouchableOpacity
                   key={bc.category}
-                  style={[styles.legendItem, isExcluded && styles.legendItemExcluded]}
-                  onPress={() => toggleExcluded(bc.category as Category)}
+                  style={styles.legendItem}
+                  onPress={() => openCategory(bc.category)}
                   activeOpacity={0.6}
                 >
-                  <View style={[styles.legendDot, { backgroundColor: color }]} />
-                  <Text
-                    style={[styles.legendLabel, isExcluded && styles.legendTextExcluded]}
-                    numberOfLines={1}
-                  >
+                  <View style={[styles.legendDot, { backgroundColor: catColor(bc.category) }]} />
+                  <Text style={styles.legendLabel} numberOfLines={1}>
                     {bc.category}
                   </Text>
-                  <Text style={[styles.legendAmount, isExcluded && styles.legendTextExcluded]}>
-                    ₹{bc.total.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                  </Text>
+                  <Text style={styles.legendAmount}>{rupees(bc.total)}</Text>
                 </TouchableOpacity>
-              );
-            })}
-          </View>
-        )}
-        {excluded.size > 0 && (
-          <Text style={styles.excludingCaption}>
-            excluding {Array.from(excluded).join(', ')}
-          </Text>
-        )}
-      </Card>
-
-      {/* ── Uber (this month, net of reimbursements — same figure as the Uber screen).
-           Shown whenever Uber was ever used: this card is the only door to the
-           Uber screen, so hiding it in a ride-free month would lock the split
-           calculator away right when the month's first ride needs recording. ── */}
-      {uberEverUsed && (
-        <>
-          <SectionHeader title="Uber" />
-          <TouchableOpacity
-            style={styles.uberCard}
-            onPress={() => navigation.navigate('Uber')}
-            activeOpacity={0.8}
-          >
-            <View style={styles.uberLeft}>
-              <Icon name="car" size={28} color={CATEGORY_META.Uber.color} />
-              <View>
-                <Text style={styles.uberLabel}>
-                  {uberSummary.rideCount > 0
-                    ? `Uber this month (${uberSummary.rideCount} ride${uberSummary.rideCount !== 1 ? 's' : ''})`
-                    : 'Uber this month — no rides yet'}
-                </Text>
-                <AmountText
-                  amount={Math.abs(uberSummary.net)}
-                  type={uberSummary.net >= 0 ? 'expense' : 'income'}
-                  size={theme.font.size.lg}
-                />
-              </View>
+              ))}
             </View>
-            <Icon name="chevron-forward" size={18} color={theme.colors.textMuted} />
-          </TouchableOpacity>
-        </>
-      )}
-
-      {/* ── Budget section ── */}
-      {(budgetStatus.overall != null || budgetStatus.categories.length > 0) && (
-        <>
-          <SectionHeader title="Budgets" />
-          {anyOver && (
-            <View style={styles.warningBanner}>
-              <Text style={styles.warningText}>
-                {overallOver ? 'Overall budget exceeded!' : 'Some categories are over budget!'}
-              </Text>
-            </View>
-          )}
-          <Card>
-            {budgetStatus.overall != null && (
-              <View style={styles.budgetRow}>
-                <View style={styles.budgetHeader}>
-                  <Text style={styles.budgetLabel}>Overall</Text>
-                  <Text
-                    style={[
-                      styles.budgetAmt,
-                      overallOver ? styles.overBudget : undefined,
-                    ]}
-                  >
-                    ₹{budgetStatus.overall.spent.toLocaleString('en-IN', { maximumFractionDigits: 0 })} / ₹{budgetStatus.overall.limit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                  </Text>
-                </View>
-                <ProgressBar
-                  value={budgetStatus.overall.spent}
-                  max={budgetStatus.overall.limit}
-                  color={overallOver ? theme.colors.danger : theme.colors.accent}
-                  height={8}
-                />
-              </View>
-            )}
-            {budgetStatus.categories.map(cb => {
-              const isOver = cb.spent > cb.limit;
-              return (
-                <View key={cb.category} style={styles.budgetRow}>
-                  <View style={styles.budgetHeader}>
-                    <Text style={styles.budgetLabel}>{cb.category}</Text>
-                    <Text style={[styles.budgetAmt, isOver ? styles.overBudget : undefined]}>
-                      ₹{cb.spent.toLocaleString('en-IN', { maximumFractionDigits: 0 })} / ₹{cb.limit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                    </Text>
-                  </View>
-                  <ProgressBar
-                    value={cb.spent}
-                    max={cb.limit}
-                    color={
-                      isOver
-                        ? theme.colors.danger
-                        : (CATEGORIES as string[]).includes(cb.category)
-                        ? CATEGORY_META[cb.category as Category].color
-                        : theme.colors.accent
-                    }
-                    height={6}
-                  />
-                </View>
-              );
-            })}
           </Card>
         </>
       )}
 
-      {/* ── Quick insights ── */}
-      <SectionHeader title="Quick Insights" />
-      <Card>
-        <View style={styles.insightRow}>
-          <View style={styles.insightItem}>
-            <Text style={styles.insightLabel}>Top Merchant</Text>
-            <Text style={styles.insightValue} numberOfLines={1}>
-              {topMerchant != null ? topMerchant.merchant : '—'}
-            </Text>
-            {topMerchant != null && (
-              <Text style={styles.insightSub}>
-                {topMerchant.count} txn · ₹{topMerchant.total.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-              </Text>
-            )}
-          </View>
-          <View style={styles.insightDivider} />
-          <View style={styles.insightItem}>
-            <Text style={styles.insightLabel}>Biggest Expense</Text>
-            {biggestExpense != null ? (
-              <>
-                <Text style={styles.insightValue} numberOfLines={1}>
-                  {biggestExpense.merchant ?? biggestExpense.source ?? 'Unknown'}
-                </Text>
-                <AmountText
-                  amount={biggestExpense.amount}
-                  type="expense"
-                  size={theme.font.size.sm}
+      {/* ── Uber: one tappable row (the only door to the Uber screen) ── */}
+      {uberEverUsed && (
+        <TouchableOpacity
+          style={styles.uberRow}
+          onPress={() => navigation.navigate('Uber')}
+          activeOpacity={0.8}
+        >
+          <Icon name="car" size={20} color={CATEGORY_META.Uber.color} />
+          <Text style={styles.uberText} numberOfLines={1}>
+            Uber · {uberSummary.net < 0 ? '-' : ''}
+            {rupees(Math.abs(uberSummary.net))}
+            {uberWaiting > 0 ? ` · ${uberWaiting} waiting for repayment` : ''}
+          </Text>
+          <Icon name="chevron-forward" size={16} color={theme.colors.textMuted} />
+        </TouchableOpacity>
+      )}
+
+      {/* ── Budgets at ≥80% ── */}
+      {hotBudgets.length > 0 && (
+        <Card style={styles.budgetCard}>
+          {hotBudgets.map(b => {
+            const over = b.spent > b.limit;
+            return (
+              <View key={b.label} style={styles.budgetRow}>
+                <View style={styles.budgetHeader}>
+                  <Text style={styles.budgetLabel}>{b.label}</Text>
+                  <Text style={[styles.budgetAmt, over ? styles.overBudget : undefined]}>
+                    {rupees(b.spent)} / {rupees(b.limit)}
+                  </Text>
+                </View>
+                <ProgressBar
+                  value={b.spent}
+                  max={b.limit}
+                  color={over ? theme.colors.danger : theme.colors.warning}
+                  height={4}
                 />
-              </>
-            ) : (
-              <Text style={styles.insightValue}>—</Text>
-            )}
-          </View>
-        </View>
-      </Card>
+              </View>
+            );
+          })}
+        </Card>
+      )}
 
       <View style={styles.bottomPad} />
-
     </ScrollView>
   );
 }
@@ -561,25 +352,6 @@ const styles = StyleSheet.create({
     margin: theme.spacing.lg,
     marginBottom: 0,
     padding: theme.spacing.lg,
-  },
-  investedCaption: {
-    fontSize: theme.font.size.xs,
-    color: theme.colors.textMuted,
-    textAlign: 'center',
-    marginTop: theme.spacing.sm,
-  },
-  heroTitle: {
-    fontSize: theme.font.size.sm,
-    color: theme.colors.textMuted,
-    fontWeight: theme.font.weight.medium,
-    marginBottom: theme.spacing.md,
-  },
-  heroRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  heroItem: {
-    flex: 1,
     alignItems: 'center',
   },
   heroLabel: {
@@ -587,60 +359,38 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
     marginBottom: theme.spacing.xs,
   },
-  delta: {
-    fontSize: 9,
-    marginTop: 2,
-    textAlign: 'center',
+  figures: {
+    flexDirection: 'row',
+    marginTop: theme.spacing.md,
+    width: '100%',
   },
-  deltaUp: {
-    color: theme.colors.danger,
+  figure: {
+    flex: 1,
+    alignItems: 'center',
   },
-  deltaDown: {
-    color: theme.colors.credit,
-  },
-  heroSep: {
-    width: 1,
-    height: 40,
-    backgroundColor: theme.colors.border,
-  },
-  perDay: {
-    fontSize: 9,
+  figureLabel: {
+    fontSize: theme.font.size.xs,
     color: theme.colors.textMuted,
+  },
+  figureValue: {
+    fontSize: theme.font.size.sm,
+    color: theme.colors.textPrimary,
+    fontWeight: theme.font.weight.medium,
     marginTop: 2,
-    textAlign: 'center',
   },
   donutCard: {
     alignItems: 'center',
-    paddingVertical: theme.spacing.lg,
-  },
-  uberCard: {
-    marginHorizontal: theme.spacing.lg,
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.radius.lg,
-    padding: theme.spacing.lg,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  uberLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.md,
-  },
-  uberLabel: {
-    fontSize: theme.font.size.xs,
-    color: theme.colors.textSecondary,
-    marginBottom: 2,
+    paddingVertical: theme.spacing.md,
   },
   legend: {
     width: '100%',
-    marginTop: theme.spacing.md,
-    gap: theme.spacing.sm,
+    marginTop: theme.spacing.sm,
   },
   legendItem: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.sm,
+    paddingVertical: theme.spacing.sm,
   },
   legendDot: {
     width: 10,
@@ -657,35 +407,27 @@ const styles = StyleSheet.create({
     color: theme.colors.textPrimary,
     fontWeight: theme.font.weight.medium,
   },
-  legendItemExcluded: {
-    opacity: 0.4,
-  },
-  legendTextExcluded: {
-    textDecorationLine: 'line-through',
-  },
-  excludingCaption: {
-    fontSize: theme.font.size.xs,
-    color: theme.colors.textMuted,
-    marginTop: theme.spacing.sm,
-    textAlign: 'center',
-    fontStyle: 'italic',
-  },
-  warningBanner: {
+  uberRow: {
     marginHorizontal: theme.spacing.lg,
-    marginTop: theme.spacing.sm,
-    backgroundColor: theme.colors.warning + '22',
-    borderLeftWidth: 3,
-    borderLeftColor: theme.colors.warning,
-    padding: theme.spacing.md,
-    borderRadius: theme.radius.sm,
+    marginTop: theme.spacing.lg,
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.lg,
+    paddingVertical: theme.spacing.md,
+    paddingHorizontal: theme.spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
   },
-  warningText: {
-    color: theme.colors.warning,
+  uberText: {
+    flex: 1,
     fontSize: theme.font.size.sm,
-    fontWeight: theme.font.weight.medium,
+    color: theme.colors.textPrimary,
+  },
+  budgetCard: {
+    marginTop: theme.spacing.lg,
   },
   budgetRow: {
-    marginBottom: theme.spacing.md,
+    marginBottom: theme.spacing.sm,
     gap: theme.spacing.xs,
   },
   budgetHeader: {
@@ -703,34 +445,6 @@ const styles = StyleSheet.create({
   },
   overBudget: {
     color: theme.colors.danger,
-  },
-  insightRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-  },
-  insightItem: {
-    flex: 1,
-    gap: theme.spacing.xs,
-  },
-  insightDivider: {
-    width: 1,
-    height: 60,
-    backgroundColor: theme.colors.border,
-    marginHorizontal: theme.spacing.md,
-  },
-  insightLabel: {
-    fontSize: theme.font.size.xs,
-    color: theme.colors.textMuted,
-    fontWeight: theme.font.weight.medium,
-  },
-  insightValue: {
-    fontSize: theme.font.size.md,
-    color: theme.colors.textPrimary,
-    fontWeight: theme.font.weight.semibold,
-  },
-  insightSub: {
-    fontSize: theme.font.size.xs,
-    color: theme.colors.textMuted,
   },
   bottomPad: {
     height: theme.spacing.xxl,

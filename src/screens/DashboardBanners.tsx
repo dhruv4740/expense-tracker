@@ -1,6 +1,6 @@
 // ─── Dashboard action banners (in-app only) ──────────────────────────────────
 //
-// Three kinds, at most one of each, stacked above the Dashboard cards:
+// Three kinds, at most TWO shown at once (priority = order below), above the cards:
 //  1. Auto-applied own-account transfer  — "Marked ₹X A → B as a transfer · Undo"
 //     (stays until seen/dismissed; Undo restores the rows' previous types)
 //  2. Suggested own-account transfer     — "Looks like a transfer … · Link / Not this"
@@ -77,7 +77,11 @@ export default function DashboardBanners() {
     DeviceEventEmitter.emit(DATA_CHANGED);
   }, []);
 
-  const { auto, autoMore, suggestion, repay } = state;
+  // At most two banners, highest confidence first: auto-applied (Undo) →
+  // repayment (high confidence only) → medium transfer suggestion.
+  const { auto, autoMore } = state;
+  const repay = state.repay;
+  const suggestion = auto && repay ? null : state.suggestion;
 
   return (
     <>
