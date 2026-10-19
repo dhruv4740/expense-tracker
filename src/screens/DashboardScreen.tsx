@@ -43,6 +43,7 @@ import {
 import { theme } from '../theme';
 import { monthRange, prevMonthRange, localDayIndexToDate, completedDays, formatDayLabel } from '../dates';
 import { computeBudgetStatus } from '../budgets';
+import DashboardBanners from './DashboardBanners';
 import type { BudgetStatus } from '../budgets';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -242,6 +243,9 @@ export default function DashboardScreen() {
           <Text style={styles.healthBannerAction}>Fix →</Text>
         </TouchableOpacity>
       )}
+
+      {/* ── Transfer / repayment banners ── */}
+      <DashboardBanners />
 
       {/* ── Uncategorized review banner ── */}
       {uncategorizedCount > 0 && (
