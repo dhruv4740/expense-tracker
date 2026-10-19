@@ -383,3 +383,58 @@ describe('suggestSettlements', () => {
     }
   });
 });
+
+// ─── generic pair-to-cancel ───────────────────────────────────────────────────
+
+import { suggestPairs, PAIR_CUTOFF } from '../settle';
+import type { PairParent, CandidateTx as PairCandidate } from '../settle';
+
+describe('suggestPairs', () => {
+  const DAY = 86_400_000;
+  const parent: PairParent = { id: 1, type: 'expense', amount: 500, timestamp: 1_700_000_000_000, counterparty: 'anita@okaxis' };
+  const cand = (over: Partial<PairCandidate>): PairCandidate => ({
+    id: 10, type: 'income', amount: 500, category: 'Friend Transfer',
+    timestamp: parent.timestamp + DAY, ...over,
+  });
+
+  it('an exact opposite-direction match outranks a partial one', () => {
+    const r = suggestPairs(parent, [cand({ id: 11, amount: 200 }), cand({ id: 12 })]);
+    expect(r.map(x => x.candidate.id)).toEqual([12, 11]);
+    expect(r[0].score).toBeGreaterThan(r[1].score);
+  });
+
+  it('works for an income parent cancelled by an expense', () => {
+    const inc: PairParent = { ...parent, type: 'income' };
+    expect(suggestPairs(inc, [cand({ type: 'expense' })])).toHaveLength(1);
+    expect(suggestPairs(inc, [cand({ type: 'income' })])).toHaveLength(0);
+  });
+
+  it.each([
+    ['same direction', { type: 'expense' as const }],
+    ['self', { type: 'self' as const }],
+    ['Investment', { category: 'Investment' }],
+    ['already linked', { settles_id: 99 }],
+    ['itself', { id: 1 }],
+    ['larger than the remainder', { amount: 800 }],
+    ['before the parent', { timestamp: parent.timestamp - 2 * DAY }],
+    ['over 30 days later', { timestamp: parent.timestamp + 40 * DAY }],
+  ])('rejects %s', (_n, over) => {
+    expect(suggestPairs(parent, [cand(over)])).toEqual([]);
+  });
+
+  it('measures against what is left after earlier payments', () => {
+    const half = { ...parent, alreadyPaid: 300 };
+    expect(suggestPairs(half, [cand({ amount: 200 })])[0].reason).toMatch(/exactly/);
+    expect(suggestPairs(half, [cand({ amount: 500 })])).toEqual([]);
+  });
+
+  it('same person boosts the score; limit and cutoff apply', () => {
+    const base = suggestPairs(parent, [cand({})])[0].score;
+    const same = suggestPairs(parent, [cand({ counterparty: 'anita@okaxis' })])[0];
+    expect(same.score).toBeGreaterThan(base);
+    expect(same.reason).toMatch(/same person/);
+    const many = Array.from({ length: 8 }, (_, i) => cand({ id: 20 + i }));
+    expect(suggestPairs(parent, many)).toHaveLength(5);
+    expect(PAIR_CUTOFF).toBeGreaterThan(0);
+  });
+});

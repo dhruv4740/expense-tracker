@@ -224,3 +224,114 @@ export function suggestSettlements(
 
   return [...best.values()].sort((a, b) => b.score - a.score).slice(0, limit);
 }
+
+// ─── Generic pair-to-cancel ───────────────────────────────────────────────────
+//
+// Any expense can be cancelled (in part) by an income that repays it, and any
+// income by an expense that returns it. This is the non-Uber counterpart of
+// scoreCandidate: no fare heuristics, just direction, amount and timing.
+
+/** Minimum score for a pair candidate to be offered. */
+export const PAIR_CUTOFF = 30;
+
+export interface PairParent {
+  id: number;
+  type: 'expense' | 'income';
+  amount: number;
+  timestamp: number;
+  counterparty?: string | null;
+  merchant?: string | null;
+  /** Already cancelled by linked rows; remaining = amount - alreadyPaid. */
+  alreadyPaid?: number;
+}
+
+export interface PairSuggestion {
+  candidate: CandidateTx;
+  score: number;
+  reason: string;
+}
+
+function personKey(s?: string | null): string {
+  return (s ?? '').toLowerCase().replace(/[^a-z0-9@]/g, '');
+}
+
+export function scorePair(
+  parent: PairParent,
+  candidate: CandidateTx,
+  ctx: ScoreContext = {},
+): { score: number; reason: string } {
+  const none = { score: 0, reason: '' };
+  if (candidate.type === 'self' || candidate.type === parent.type) {
+    return none; // must be the opposite direction
+  }
+  if (candidate.settles_id != null || candidate.category === 'Investment') {
+    return none;
+  }
+  if (candidate.id != null && candidate.id === parent.id) {
+    return none;
+  }
+  const remaining = parent.amount - (parent.alreadyPaid ?? 0);
+  if (!(remaining > 0) || !(candidate.amount > 0)) {
+    return none;
+  }
+  if (candidate.amount > remaining + AMOUNT_EPSILON) {
+    return none;
+  }
+  const deltaMs = candidate.timestamp - parent.timestamp;
+  if (deltaMs < -12 * 3600_000 || deltaMs / DAY_MS > 30) {
+    return none;
+  }
+  const deltaDays = deltaMs / DAY_MS;
+
+  let score: number;
+  let reason: string;
+  if (approxEqual(candidate.amount, remaining)) {
+    score = 60;
+    reason = `₹${formatAmount(candidate.amount)} exactly matches`;
+  } else {
+    score = 15 + Math.round((candidate.amount / remaining) * 30);
+    reason = `₹${formatAmount(candidate.amount)} of ₹${formatAmount(remaining)}`;
+  }
+
+  if (deltaDays <= 3) {
+    score += 25;
+  } else if (deltaDays <= 7) {
+    score += 15;
+  } else if (deltaDays <= 14) {
+    score += 5;
+  }
+
+  const candKeys = [personKey(candidate.counterparty), personKey(candidate.merchant)].filter(Boolean);
+  const parentKeys = [personKey(parent.counterparty), personKey(parent.merchant)].filter(Boolean);
+  if (candKeys.some(k => parentKeys.includes(k))) {
+    score += 20;
+    reason += ' · same person';
+  } else {
+    const cp = candidate.counterparty?.toLowerCase();
+    if (cp && ctx.knownCounterparties?.includes(cp)) {
+      score += 10;
+      reason += ' · has settled before';
+    }
+  }
+  return { score, reason };
+}
+
+/**
+ * Best repayment candidates for one parent row (expense or income), strongest
+ * first, above PAIR_CUTOFF, at most `limit`.
+ */
+export function suggestPairs(
+  parent: PairParent,
+  candidates: CandidateTx[],
+  ctx: ScoreContext = {},
+  limit = 5,
+): PairSuggestion[] {
+  const out: PairSuggestion[] = [];
+  for (const candidate of candidates) {
+    const { score, reason } = scorePair(parent, candidate, ctx);
+    if (score >= PAIR_CUTOFF) {
+      out.push({ candidate, score, reason });
+    }
+  }
+  return out.sort((a, b) => b.score - a.score).slice(0, limit);
+}
