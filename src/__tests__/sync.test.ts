@@ -22,6 +22,11 @@ jest.mock('../db', () => ({
   getAllMerchantRules: jest.fn(() => ({})),
 }));
 
+jest.mock('../transferSync', () => ({
+  snapshotMaxId: jest.fn(() => 0),
+  runTransferPairing: jest.fn(() => 0),
+}));
+
 jest.mock('../settings', () => ({
   getIdentity: jest.fn(() => ({ name: '', phones: [], upiHandles: [], accountLast4: [] })),
   getFamilyMembers: jest.fn(() => []),

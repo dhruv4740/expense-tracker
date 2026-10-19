@@ -18,6 +18,7 @@ import { peekBuffer, ackBuffer, onSmsReceived, type RawEvent } from './native/Sm
 import { onNotificationReceived } from './native/NotificationModule';
 import { parseTransaction } from './parser';
 import { insertTransaction, getAllMerchantRules } from './db';
+import { runTransferPairing, snapshotMaxId } from './transferSync';
 import { classify } from './classify';
 import type { Identity } from './identity';
 import { getIdentity, getFamilyMembers } from './settings';
@@ -99,6 +100,40 @@ function processOne(e: RawEvent): boolean {
   });
 }
 
+/** Max row id before a batch, or -1 (skip pairing) if it cannot be read. */
+function safeSnapshot(): number {
+  try {
+    return snapshotMaxId();
+  } catch {
+    return -1;
+  }
+}
+
+/**
+ * Look for own-account transfer pairs among rows inserted after `maxIdBefore`
+ * and auto-mark the high-confidence ones. Never allowed to break a sync.
+ */
+function pairNewRows(maxIdBefore: number): void {
+  if (maxIdBefore < 0) {
+    return;
+  }
+  try {
+    runTransferPairing(maxIdBefore, identityCache);
+  } catch {
+    // Pairing is a convenience; the rows are already safely stored.
+  }
+}
+
+/** processOne + pairing for a single live event. */
+function processLive(e: RawEvent): boolean {
+  const before = safeSnapshot();
+  const ok = processOne(e);
+  if (ok) {
+    pairNewRows(before);
+  }
+  return ok;
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
@@ -120,7 +155,9 @@ export async function syncBuffer(): Promise<number> {
 
   let inserted = 0;
   let processed = 0;
+  let maxIdBefore = 0;
   try {
+    maxIdBefore = safeSnapshot();
     const events = await peekBuffer();
     for (const e of events) {
       try {
@@ -139,6 +176,7 @@ export async function syncBuffer(): Promise<number> {
     // Native module not ready (e.g. dev fast-refresh) — buffer persists for next drain.
   }
   if (inserted > 0) {
+    pairNewRows(maxIdBefore);
     DeviceEventEmitter.emit(DATA_CHANGED);
   }
   return inserted;
@@ -153,12 +191,12 @@ export async function syncBuffer(): Promise<number> {
 export function subscribeLiveEvents(): () => void {
   const subs = [
     onSmsReceived(e => {
-      if (processOne(e)) {
+      if (processLive(e)) {
         DeviceEventEmitter.emit(DATA_CHANGED);
       }
     }),
     onNotificationReceived(e => {
-      if (processOne(e as RawEvent)) {
+      if (processLive(e as RawEvent)) {
         DeviceEventEmitter.emit(DATA_CHANGED);
       }
     }),

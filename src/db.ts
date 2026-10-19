@@ -1074,3 +1074,37 @@ export function getUncategorizedCount(): number {
   );
   return Number((res.rows ?? [])[0]?.cnt ?? 0);
 }
+
+// ─── transfer pairing support ────────────────────────────────────────────────
+
+/** Highest row id (0 when empty). Rows inserted after a snapshot have id > it. */
+export function getMaxTransactionId(): number {
+  const conn = requireDb();
+  const res = conn.executeSync('SELECT MAX(id) AS m FROM transactions');
+  return Number((res.rows ?? [])[0]?.m ?? 0);
+}
+
+/** Raw rows with timestamp in [from, to], oldest first (no netting columns). */
+export function getTransactionsBetween(from: number, to: number): TransactionRow[] {
+  const conn = requireDb();
+  const res = conn.executeSync(
+    'SELECT * FROM transactions WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp ASC',
+    [from, to],
+  );
+  return (res.rows ?? []).map(mapRow);
+}
+
+/** Raw rows inserted after `afterId`. */
+export function getTransactionsAfterId(afterId: number): TransactionRow[] {
+  const conn = requireDb();
+  const res = conn.executeSync('SELECT * FROM transactions WHERE id > ? ORDER BY id ASC', [afterId]);
+  return (res.rows ?? []).map(mapRow);
+}
+
+/** One raw row by id, or null. */
+export function getTransactionById(id: number): TransactionRow | null {
+  const conn = requireDb();
+  const res = conn.executeSync('SELECT * FROM transactions WHERE id = ? LIMIT 1', [id]);
+  const row = (res.rows ?? [])[0];
+  return row ? mapRow(row) : null;
+}
