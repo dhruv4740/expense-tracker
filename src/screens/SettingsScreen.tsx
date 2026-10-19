@@ -55,6 +55,9 @@ import type { InstalledApp } from '../native/NotificationModule';
 import { exportCsv, exportJson, restoreFromJson } from '../export';
 import { Card, SectionHeader, Icon } from '../components';
 import { theme } from '../theme';
+import { RecheckModal } from './RecheckModal';
+import { applyRecheck, getRecheckLog, previewRecheck, undoRecheck } from '../recheckSync';
+import type { RecheckChange } from '../recheck';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -168,6 +171,13 @@ export default function SettingsScreen() {
   // ── Data buttons ────────────────────────────────────────────────────────────
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [recheck, setRecheck] = useState<RecheckChange[] | null>(null);
+  const [hasRecheckLog, setHasRecheckLog] = useState(() => getRecheckLog() != null);
+  const finishRecheck = (msg: string) => {
+    setHasRecheckLog(getRecheckLog() != null);
+    DeviceEventEmitter.emit(DATA_CHANGED);
+    Alert.alert('Re-check', msg, undefined, { cancelable: true });
+  };
 
   const loadSuggestions = useCallback(() => {
     const identity = getIdentity();
@@ -680,7 +690,33 @@ export default function SettingsScreen() {
           </Text>
           <Icon name="chevron-forward" size={16} color={theme.colors.textMuted} />
         </TouchableOpacity>
+        <TouchableOpacity style={styles.dataBtn} onPress={() => setRecheck(previewRecheck())}>
+          <Icon name="refresh" size={18} color={theme.colors.accent} />
+          <Text style={[styles.dataBtnText, styles.dataBtnTextGrow]}>
+            Re-check old transactions
+          </Text>
+        </TouchableOpacity>
+        {hasRecheckLog && (
+          <TouchableOpacity
+            style={styles.dataBtn}
+            onPress={() => {
+              const r = undoRecheck();
+              finishRecheck(`Restored ${r.restored} rows${r.skipped ? `; ${r.skipped} left as you edited them` : ''}.`);
+            }}
+          >
+            <Icon name="refresh" size={18} color={theme.colors.accent} />
+            <Text style={styles.dataBtnText}>Undo last re-check</Text>
+          </TouchableOpacity>
+        )}
       </Card>
+      <RecheckModal
+        changes={recheck}
+        onCancel={() => setRecheck(null)}
+        onApply={sel => {
+          setRecheck(null);
+          finishRecheck(`Updated ${applyRecheck(sel)} rows. You can undo this from Settings.`);
+        }}
+      />
 
       {/* ── Data ── */}
       <SectionHeader title="Data" />
