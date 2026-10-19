@@ -3,7 +3,7 @@
 // Profile, budgets, notification allowlist, permissions, data export/import,
 // and about section. ScrollView with SectionHeader-divided Card groups.
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   Alert,
   Modal,
@@ -25,10 +25,21 @@ import {
   getBudgets,
   setBudget,
   OVERALL_BUDGET_KEY,
+  getAccountCounts,
+  getIncomeSources,
 } from '../db';
 import type { Budget } from '../db';
 import { CATEGORIES } from '../categories';
-import { getIdentity, setIdentity, getDismissedApps, setDismissedApps } from '../settings';
+import {
+  getIdentity,
+  setIdentity,
+  getDismissedApps,
+  setDismissedApps,
+  getFamilyMembers,
+  setFamilyMembers,
+} from '../settings';
+import { suggestOwnAccounts, suggestFamily } from '../suggestions';
+import type { AccountCount, FamilySuggestion } from '../suggestions';
 import type { Identity } from '../identity';
 import { refreshSyncCaches } from '../sync';
 import { DATA_CHANGED } from '../sync';
@@ -62,12 +73,14 @@ const InputRow = React.memo(function InputRow({
   onChangeText,
   keyboardType = 'default',
   placeholder,
+  hint,
 }: {
   label: string;
   value: string;
   onChangeText: (v: string) => void;
   keyboardType?: 'default' | 'numeric' | 'email-address';
   placeholder?: string;
+  hint?: string;
 }) {
   return (
     <View style={inputStyles.row}>
@@ -80,9 +93,21 @@ const InputRow = React.memo(function InputRow({
         placeholder={placeholder ?? ''}
         placeholderTextColor={theme.colors.textMuted}
       />
+      {hint ? <Text style={inputStyles.hint}>{hint}</Text> : null}
     </View>
   );
 });
+
+/** ₹61k / ₹1.2L style short amount for chips. */
+function shortRupees(n: number): string {
+  if (n >= 100000) {
+    return `₹${(n / 100000).toFixed(1).replace(/\.0$/, '')}L`;
+  }
+  if (n >= 1000) {
+    return `₹${Math.round(n / 1000)}k`;
+  }
+  return `₹${Math.round(n)}`;
+}
 
 const inputStyles = StyleSheet.create({
   row: {
@@ -92,6 +117,11 @@ const inputStyles = StyleSheet.create({
     fontSize: theme.font.size.sm,
     color: theme.colors.textMuted,
     marginBottom: theme.spacing.xs,
+  },
+  hint: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textMuted,
+    marginTop: theme.spacing.xs,
   },
   input: {
     backgroundColor: theme.colors.surfaceAlt,
@@ -116,6 +146,12 @@ export default function SettingsScreen() {
   const [upiHandles, setUpiHandles] = useState('');
   const [accountLast4, setAccountLast4] = useState('');
 
+  // ── Suggestions ─────────────────────────────────────────────────────────────
+  const [accountSuggestions, setAccountSuggestions] = useState<AccountCount[]>([]);
+  const [family, setFamily] = useState<string[]>([]);
+  const [familyInput, setFamilyInput] = useState('');
+  const [familySuggestions, setFamilySuggestions] = useState<FamilySuggestion[]>([]);
+
   // ── Budgets ─────────────────────────────────────────────────────────────────
   const [overallBudget, setOverallBudget] = useState('');
   const [categoryBudgets, setCategoryBudgets] = useState<Record<string, string>>({});
@@ -133,6 +169,14 @@ export default function SettingsScreen() {
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
 
+  const loadSuggestions = useCallback(() => {
+    const identity = getIdentity();
+    const fam = getFamilyMembers();
+    setFamily(fam);
+    setAccountSuggestions(suggestOwnAccounts(getAccountCounts(), identity));
+    setFamilySuggestions(suggestFamily(getIncomeSources(), { identity, family: fam }));
+  }, []);
+
   const load = useCallback(async () => {
     // Profile
     const identity: Identity = getIdentity();
@@ -140,6 +184,7 @@ export default function SettingsScreen() {
     setPhones((identity.phones ?? []).join(', '));
     setUpiHandles((identity.upiHandles ?? []).join(', '));
     setAccountLast4((identity.accountLast4 ?? []).join(', '));
+    loadSuggestions();
 
     // Budgets
     const budgets: Budget[] = getBudgets();
@@ -188,7 +233,7 @@ export default function SettingsScreen() {
     } catch {
       setNotifGranted(false);
     }
-  }, []);
+  }, [loadSuggestions]);
 
   useFocusEffect(
     useCallback(() => {
@@ -213,6 +258,32 @@ export default function SettingsScreen() {
     setIdentity(identity);
     refreshSyncCaches();
     Alert.alert('Saved', 'Profile updated.');
+  }
+
+  function handleAddAccount(last4: string) {
+    const identity = getIdentity();
+    if (!identity.accountLast4.includes(last4)) {
+      identity.accountLast4 = [...identity.accountLast4, last4];
+      setIdentity(identity);
+      refreshSyncCaches();
+    }
+    setAccountLast4(identity.accountLast4.join(', '));
+    loadSuggestions();
+  }
+
+  function saveFamily(next: string[]) {
+    setFamilyMembers(next);
+    refreshSyncCaches();
+    loadSuggestions();
+  }
+
+  function handleAddFamily(value: string) {
+    const v = value.trim();
+    if (!v || family.some(f => f.toLowerCase() === v.toLowerCase())) {
+      return;
+    }
+    saveFamily([...family, v]);
+    setFamilyInput('');
   }
 
   // ── Budget save ──────────────────────────────────────────────────────────────
@@ -341,7 +412,13 @@ export default function SettingsScreen() {
       {/* ── Profile ── */}
       <SectionHeader title="Profile" />
       <Card>
-        <InputRow label="Name" value={name} onChangeText={setName} placeholder="Your name" />
+        <InputRow
+          label="Name"
+          value={name}
+          onChangeText={setName}
+          placeholder="Your name"
+          hint="Used to spot transfers to your own accounts"
+        />
         <InputRow
           label="Phone numbers (comma-separated)"
           value={phones}
@@ -362,9 +439,73 @@ export default function SettingsScreen() {
           keyboardType="numeric"
           placeholder="1234, 5678"
         />
+        {accountSuggestions.length > 0 && (
+          <View style={styles.chipRow}>
+            {accountSuggestions.slice(0, 6).map(a => (
+              <TouchableOpacity
+                key={a.account}
+                style={styles.chip}
+                onPress={() => handleAddAccount(a.account)}
+              >
+                <Text style={styles.chipText}>
+                  Add ••{a.account} ({a.count} msgs)
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
         <TouchableOpacity style={styles.saveBtn} onPress={handleSaveProfile}>
           <Text style={styles.saveBtnText}>Save Profile</Text>
         </TouchableOpacity>
+      </Card>
+
+      {/* ── Family ── */}
+      <SectionHeader title="Family" />
+      <Card>
+        <Text style={styles.subLabel}>
+          Credits from these people are tracked as Family income, not Friend Transfer.
+        </Text>
+        <View style={styles.chipRow}>
+          {family.map(f => (
+            <TouchableOpacity
+              key={f}
+              style={styles.chip}
+              onPress={() => saveFamily(family.filter(x => x !== f))}
+            >
+              <Text style={styles.chipText}>{f}  ✕</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        <InputRow
+          label="Add a name or UPI handle"
+          value={familyInput}
+          onChangeText={setFamilyInput}
+          placeholder="Full name or name@upi"
+        />
+        <TouchableOpacity
+          style={styles.saveBtn}
+          onPress={() => handleAddFamily(familyInput)}
+        >
+          <Text style={styles.saveBtnText}>Add</Text>
+        </TouchableOpacity>
+        {familySuggestions.length > 0 && (
+          <>
+            <Text style={[styles.subLabel, styles.suggestLabel]}>Suggestions</Text>
+            <View style={styles.chipRow}>
+              {familySuggestions.map(sug => (
+                <TouchableOpacity
+                  key={sug.value}
+                  style={styles.chip}
+                  onPress={() => handleAddFamily(sug.value)}
+                >
+                  <Text style={styles.chipText}>
+                    + {sug.value} · {shortRupees(sug.total)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        )}
       </Card>
 
       {/* ── Budgets ── */}
@@ -619,6 +760,27 @@ const styles = StyleSheet.create({
     color: '#000',
     fontWeight: theme.font.weight.bold,
     fontSize: theme.font.size.md,
+  },
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.sm,
+  },
+  chip: {
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.xs + 2,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.surfaceAlt,
+    borderWidth: 1,
+    borderColor: theme.colors.accent + '55',
+  },
+  chipText: {
+    color: theme.colors.accent,
+    fontSize: theme.font.size.sm,
+  },
+  suggestLabel: {
+    marginTop: theme.spacing.md,
   },
   subLabel: {
     fontSize: theme.font.size.xs,

@@ -851,6 +851,40 @@ export function setBudget(category: string, monthlyLimit: number): void {
   );
 }
 
+// ─── settings suggestions (aggregates; shaped by src/suggestions.ts) ──────────
+
+/** Distinct own-account fragments seen on stored rows, with message counts. */
+export function getAccountCounts(): { account: string; count: number }[] {
+  const conn = requireDb();
+  const res = conn.executeSync(
+    `SELECT account, COUNT(*) AS n FROM transactions
+      WHERE account IS NOT NULL AND account != ''
+      GROUP BY account ORDER BY n DESC`,
+  );
+  return (res.rows ?? []).map(r => ({
+    account: String(r.account),
+    count: Number(r.n ?? 0),
+  }));
+}
+
+/** Income merchants/counterparties by all-time total (self transfers excluded). */
+export function getIncomeSources(
+  limit = 200,
+): { merchant: string | null; counterparty: string | null; total: number }[] {
+  const conn = requireDb();
+  const res = conn.executeSync(
+    `SELECT merchant, counterparty, SUM(amount) AS total FROM transactions
+      WHERE type = 'income'
+      GROUP BY merchant, counterparty ORDER BY total DESC LIMIT ?`,
+    [limit],
+  );
+  return (res.rows ?? []).map(r => ({
+    merchant: r.merchant != null ? String(r.merchant) : null,
+    counterparty: r.counterparty != null ? String(r.counterparty) : null,
+    total: Number(r.total ?? 0),
+  }));
+}
+
 // ─── key/value settings store ─────────────────────────────────────────────────
 
 export function getSetting(key: string): string | null {

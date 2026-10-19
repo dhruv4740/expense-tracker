@@ -357,7 +357,7 @@ const INCOME_SIGNAL_RE =
   /\b(salary|payroll|interest|dividend|cashback|matured|maturity|pension|stipend|bonus)\b/i;
 
 /** A person-to-person UPI handle (as opposed to a merchant/business VPA). */
-const MERCHANT_VPA_RE =
+export const MERCHANT_VPA_RE =
   /\b(payments?|pay|billdesk|razorpay|payu|merchant|store|retail|enterprises?|pvt|ltd)\b/i;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
