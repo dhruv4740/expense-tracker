@@ -294,12 +294,12 @@ export function insertTransaction(
   //    (bank SMS often lack one) — if BOTH are known and differ, it's a
   //    different payment, not a duplicate.
   // Manual entries are deliberate user actions and never soft-deduped.
-  if (!options.skipSoftDedup && (tx.channel === 'sms' || tx.channel === 'notification')) {
+  if (!options.skipSoftDedup && (tx.channel === 'sms' || tx.channel === 'notification' || tx.channel === 'email')) {
     const existing = conn.executeSync(
       `SELECT 1 FROM transactions
         WHERE amount = ?
           AND ABS(timestamp - ?) < 120000
-          AND channel IS NOT NULL AND channel != ? AND channel IN ('sms', 'notification')
+          AND channel IS NOT NULL AND channel != ? AND channel IN ('sms', 'notification', 'email')
           AND (counterparty IS NULL OR ? IS NULL OR counterparty = ?)
         LIMIT 1`,
       [tx.amount, tx.timestamp, tx.channel, tx.counterparty ?? null, tx.counterparty ?? null],

@@ -43,6 +43,7 @@ export interface RecheckCtx {
   rules: Record<string, string>;
   family: string[];
   friends?: string[];
+  amazonTopupFamily?: boolean;
   /** Row ids never to change (e.g. rows in the auto-pairing log). */
   protectedIds?: number[];
 }

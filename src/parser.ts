@@ -58,7 +58,8 @@ export type TransactionKind =
   | 'card_bill'
   | 'wallet_load'
   | 'own_transfer'
-  | 'investment';
+  | 'investment'
+  | 'wallet_topup';
 
 // ─── Compiled regexes ─────────────────────────────────────────────────────────
 
@@ -225,6 +226,8 @@ interface Template {
   /** Absent: generic extraction. Present (even null-returning): authoritative. */
   merchant?: string | ((m: RegExpMatchArray) => string | null);
   kind?: TransactionKind;
+  /** Overrides the sender as the stored source (e.g. 'Amazon Pay' for a Gmail email). */
+  source?: string;
 }
 
 /**
@@ -232,6 +235,17 @@ interface Template {
  * generic direction logic. Each is specific enough that a match is decisive.
  */
 const TEMPLATES: Template[] = [
+  // Amazon Pay wallet top-up confirmation ("₹2000.00 added to your Amazon Pay
+  // Wallet" / "You have added ₹2000.00 successfully to your Amazon Pay Wallet").
+  // Income into the user's own wallet; classify() decides Family vs self. Must not
+  // match "Apay Wallet balance is debited" (that has no "added ... Amazon Pay Wallet").
+  {
+    re: /\badded\b[\s\S]*?\bamazon\s*pay\s*wallet/i,
+    isExpense: false,
+    merchant: () => 'Amazon Pay wallet top-up',
+    kind: 'wallet_topup',
+    source: 'Amazon Pay',
+  },
   {
     re: /credit card transaction of (?:Rs\.?|INR|₹)\s*[\d,.]+ on (.+?) is successful/i,
     isExpense: true,
@@ -589,7 +603,7 @@ export function parseTransaction(
     amount,
     merchant,
     counterparty,
-    source: sender,
+    source: template?.source ?? sender,
     isExpense,
     account,
     timestamp: ts,

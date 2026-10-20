@@ -40,6 +40,8 @@ import {
   setFamilyMembers,
   getFriends,
   setFriends,
+  getAmazonTopupFamily,
+  setAmazonTopupFamily,
 } from '../settings';
 import { suggestOwnAccounts, suggestFamily } from '../suggestions';
 import type { AccountCount, FamilySuggestion } from '../suggestions';
@@ -159,6 +161,7 @@ export default function SettingsScreen() {
   const [familySuggestions, setFamilySuggestions] = useState<FamilySuggestion[]>([]);
   const [friends, setFriendsState] = useState<string[]>([]);
   const [friendInput, setFriendInput] = useState('');
+  const [amazonTopup, setAmazonTopup] = useState(true);
   const [friendSuggestions, setFriendSuggestions] = useState<FamilySuggestion[]>([]);
 
   // ── Budgets ─────────────────────────────────────────────────────────────────
@@ -194,6 +197,7 @@ export default function SettingsScreen() {
     setAccountSuggestions(suggestOwnAccounts(getAccountCounts(), identity));
     const fr = getFriends();
     setFriendsState(fr);
+    setAmazonTopup(getAmazonTopupFamily());
     setFamilySuggestions(
       suggestFamily(getIncomeSources(), { identity, family: fam, friends: fr }),
     );
@@ -546,6 +550,28 @@ export default function SettingsScreen() {
             </View>
           </>
         )}
+      </Card>
+
+      <Card>
+        <View style={styles.allowRow}>
+          <View style={styles.allowLabelBlock}>
+            <Text style={styles.allowLabel}>Amazon Pay wallet top-ups come from family</Text>
+            <Text style={styles.subLabel}>
+              Needs the Gmail "added to your Amazon Pay Wallet" notification. Off: counted as
+              your own money (hidden).
+            </Text>
+          </View>
+          <Switch
+            value={amazonTopup}
+            onValueChange={v => {
+              setAmazonTopup(v);
+              setAmazonTopupFamily(v);
+              refreshSyncCaches();
+            }}
+            trackColor={{ true: theme.colors.accent, false: theme.colors.surfaceAlt }}
+            thumbColor={theme.colors.textPrimary}
+          />
+        </View>
       </Card>
 
       {/* ── Friends ── */}

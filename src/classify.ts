@@ -18,6 +18,8 @@ export interface ClassifyContext {
   family: string[];
   /** Names or VPAs from the `friends` setting (optional: older callers omit it). */
   friends?: string[];
+  /** Amazon Pay wallet top-ups are family money (default true when omitted). */
+  amazonTopupFamily?: boolean;
 }
 
 export interface Classification {
@@ -68,6 +70,12 @@ export function classify(
   ctx: ClassifyContext,
 ): Classification {
   const { kind } = parsed;
+  // Amazon Pay wallet top-up (Gmail confirmation): decisive, no counterparty to match.
+  if (kind === 'wallet_topup') {
+    return ctx.amazonTopupFamily === false
+      ? { category: 'Other', type: 'self' }
+      : { category: 'Family', type: 'income' };
+  }
   if (
     kind === 'card_bill' ||
     kind === 'wallet_load' ||

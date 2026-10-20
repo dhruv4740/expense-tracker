@@ -72,6 +72,16 @@ Single source of truth so Agents A and B can build independently.
   bank SMS by chatty days, and less sensitive data sitting in SharedPreferences. No allowlist
   prefs read on this path on purpose (sender IDs vary too much to allowlist, and reading prefs
   would add I/O to a path that must stay minimal).
+- **Gmail exception (narrow, hard-coded).** `com.google.android.gm` is NOT in the allowlist or
+  its UI. `NotificationService` buffers a Gmail notification only when title+text+bigText
+  matches `added … amazon pay wallet` with a rupee amount (`GmailFilter.kt`, mirrored by
+  `src/gmailFilter.ts` — change both together); everything else is dropped before
+  `EventBuffer` (privacy), bundled summaries (`FLAG_GROUP_SUMMARY`) are skipped, and an empty
+  allowlist ("capture off") silences Gmail too. `sync.ts` re-checks the predicate. Such rows
+  get `channel = 'email'`, which takes part in cross-channel soft dedup against the Amazon app's
+  own notification. Parser: top-up → income, source `Amazon Pay`, kind `wallet_topup`;
+  `classify()` makes it `Family` income, or `self` when the Settings toggle
+  `amazon_topup_family` (default ON) is off.
 - Notification allowlist has three states, not two: key **absent** → `DEFAULT_ALLOWLIST`; key
   present but an **empty array** (`"[]"`) → capture is intentionally OFF (no fallback to
   defaults) — this is how unchecking every app in Settings actually disables capture; key

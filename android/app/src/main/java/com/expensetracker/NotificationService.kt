@@ -123,7 +123,17 @@ class NotificationService : NotificationListenerService() {
         // effectiveAllowlist() is O(1) after the first call (cache hit), matching the original
         // hardcoded set-lookup. The prefs read occurs at most once per process lifetime unless
         // the user edits the list and invalidateAllowlistCache() is called.
-        if (sbn.packageName !in effectiveAllowlist(applicationContext)) return
+        val allowlist = effectiveAllowlist(applicationContext)
+        val isGmail = sbn.packageName == GmailFilter.GMAIL_PKG
+        if (isGmail) {
+            // Gmail is never in the allowlist: it gets a hard-coded narrow filter below
+            // (Amazon Pay wallet top-ups only). An empty allowlist is the "capture off"
+            // state and silences Gmail too. Bundled "N new messages" summaries are skipped.
+            if (allowlist.isEmpty()) return
+            if (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
+        } else if (sbn.packageName !in allowlist) {
+            return
+        }
 
         val extras = sbn.notification.extras
 
@@ -139,8 +149,15 @@ class NotificationService : NotificationListenerService() {
             else -> shortText
         }
 
+        // Gmail: buffer ONLY a matching wallet top-up (body = title+text+bigText joined,
+        // the amount may sit in either field); anything else is dropped unseen.
+        val gmailBody: String? =
+            if (isGmail) GmailFilter.walletTopUpBody(title, shortText, bigText) else null
+        if (isGmail && gmailBody == null) return
+
         // Nothing to parse if body is absent.
-        if (text.isNullOrBlank()) return
+        if (!isGmail && text.isNullOrBlank()) return
+        val body: String = gmailBody ?: text!!
 
         // Single timestamp read shared by the buffered event AND the live emit so
         // both representations of the same notification agree to the millisecond —
@@ -152,7 +169,7 @@ class NotificationService : NotificationListenerService() {
             put("kind", "notification")
             put("pkg", sbn.packageName)
             put("title", title ?: "")
-            put("body", text)
+            put("body", body)
             put("ts", ts)
         }
 
@@ -165,7 +182,7 @@ class NotificationService : NotificationListenerService() {
                 putString("kind", "notification")
                 putString("pkg", sbn.packageName)
                 putString("title", title ?: "")
-                putString("body", text)
+                putString("body", body)
                 putDouble("ts", ts.toDouble())
             }
             NotificationModule.emitNotification(map)

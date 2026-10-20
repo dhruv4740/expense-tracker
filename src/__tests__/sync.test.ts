@@ -31,6 +31,7 @@ jest.mock('../settings', () => ({
   getIdentity: jest.fn(() => ({ name: '', phones: [], upiHandles: [], accountLast4: [] })),
   getFamilyMembers: jest.fn(() => []),
   getFriends: jest.fn(() => []),
+  getAmazonTopupFamily: jest.fn(() => true),
 }));
 
 import { syncBuffer } from '../sync';

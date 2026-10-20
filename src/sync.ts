@@ -21,7 +21,8 @@ import { insertTransaction, getAllMerchantRules } from './db';
 import { runTransferPairing, snapshotMaxId } from './transferSync';
 import { classify } from './classify';
 import type { Identity } from './identity';
-import { getIdentity, getFamilyMembers, getFriends } from './settings';
+import { getIdentity, getFamilyMembers, getFriends, getAmazonTopupFamily } from './settings';
+import { GMAIL_PKG, isAmazonWalletTopUp } from './gmailFilter';
 
 export const DATA_CHANGED = 'ExpenseDataChanged';
 
@@ -40,6 +41,7 @@ let identityCache: Identity = {
 let learnedRulesCache: Record<string, string> = {};
 let familyCache: string[] = [];
 let friendsCache: string[] = [];
+let amazonTopupFamilyCache = true;
 
 /**
  * Reload identity and learned merchant rules from the DB into module-level
@@ -53,6 +55,7 @@ export function refreshSyncCaches(): void {
   learnedRulesCache = getAllMerchantRules();
   familyCache = getFamilyMembers();
   friendsCache = getFriends();
+  amazonTopupFamilyCache = getAmazonTopupFamily();
 }
 
 // ─── Core processing ──────────────────────────────────────────────────────────
@@ -69,6 +72,12 @@ function processOne(e: RawEvent): boolean {
   if (!e.body) {
     return false;
   }
+  // Gmail is captured only for Amazon Pay wallet top-ups; the native side already
+  // filters, this drops anything else that somehow reached the buffer.
+  const fromGmail = e.pkg === GMAIL_PKG;
+  if (fromGmail && !isAmazonWalletTopUp(e.body)) {
+    return false;
+  }
 
   // 1. Parse — null means the message is not a transaction.
   const parsed = parseTransaction(sender, e.body, e.ts);
@@ -82,6 +91,7 @@ function processOne(e: RawEvent): boolean {
     rules: learnedRulesCache,
     family: familyCache,
     friends: friendsCache,
+    amazonTopupFamily: amazonTopupFamilyCache,
   });
 
   // 3. Merchant fallback chain: parser merchant → counterparty → sender.
@@ -99,7 +109,7 @@ function processOne(e: RawEvent): boolean {
     counterparty: parsed.counterparty ?? null,
     account: parsed.account ?? null,
     category_source: 'auto',
-    channel: e.kind,
+    channel: fromGmail ? 'email' : e.kind,
   });
 }
 

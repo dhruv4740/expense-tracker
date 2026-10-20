@@ -103,6 +103,23 @@ export function setFriends(friends: string[]): void {
   setJSON(FRIENDS_KEY, friends);
 }
 
+// ─── Amazon Pay wallet top-ups ────────────────────────────────────────────────
+
+const AMAZON_TOPUP_FAMILY_KEY = 'amazon_topup_family';
+
+/**
+ * Whether Amazon Pay wallet top-ups (from the Gmail confirmation) are treated as
+ * Family income (default ON). OFF: they are the user's own money moving → 'self'.
+ */
+export function getAmazonTopupFamily(): boolean {
+  const stored = getJSON<unknown>(AMAZON_TOPUP_FAMILY_KEY, true);
+  return stored !== false;
+}
+
+export function setAmazonTopupFamily(on: boolean): void {
+  setJSON(AMAZON_TOPUP_FAMILY_KEY, on);
+}
+
 // ─── Dismissed capture apps ────────────────────────────────────────────────────
 
 const DISMISSED_APPS_KEY = 'dismissedApps';
