@@ -316,4 +316,24 @@ describe('parseTransaction', () => {
     const r = parseTransaction('VM-YESBNK', 'This is to inform you that M/s ACME TRADERS has transferred an amount of Rs. 200.00 to your account no. XXXXXXXX1234 from their YES Bank account through RTGS/NEFT/IMPS', Date.now());
     expect(r).toMatchObject({ amount: 200, isExpense: false, merchant: 'ACME TRADERS' });
   });
+
+  it('parses slice outgoing IMPS as an expense to the named payee', () => {
+    const r = parseTransaction('VM-SLCBNK-T', 'IMPS payment of Rs. 2,97,627 from A/c xx3333 done on 18-Aug-26 to ANITA RAO is successful (Ref ID: 624253159132). Not you? Call 08048329999 - slice', Date.now());
+    expect(r).toMatchObject({ amount: 297627, isExpense: true, merchant: 'ANITA RAO' });
+  });
+
+  it('treats a UPI Lite top-up as the spend; a failed top-up is rejected', () => {
+    const ok = parseTransaction('AD-HDFCBK-S', 'UPI LITE Top-up amounting to Rs.2000.00 has been successful. Ref No 121282891840 - HDFC Bank', Date.now());
+    expect(ok).toMatchObject({ amount: 2000, isExpense: true, merchant: 'UPI Lite' });
+    const en = parseTransaction('AD-HDFCBK-S', 'UPI LITE is successfully enabled  for A/C no **1234 with Top-Up of Rs.500.00  on 07-02-26 Ref No 183791062365. - HDFC Bank', Date.now());
+    expect(en).toMatchObject({ amount: 500, isExpense: true, merchant: 'UPI Lite' });
+    expect(parseTransaction('AD-HDFCBK-S', 'UPI LITE Top-up amounting to Rs.500.00 has failed. Please try again. Ref No 121282891840 - HDFC Bank', Date.now())).toBeNull();
+  });
+
+  it('parses a gym invoice receipt and a college-portal payment as expenses', () => {
+    const g = parseTransaction('AD-FYTRAK-S', 'Dear Anita Rao , we received Rs. 16000 for invoice 58015275, now pending amount is Rs. 0, thank you Gravity Fitness ( Hiranandani Estate ). FYTRACK', Date.now());
+    expect(g).toMatchObject({ amount: 16000, isExpense: true, merchant: 'Gravity Fitness' });
+    const e = parseTransaction('CP-DGTEDU', 'ANITA, your payment of Rs 2520.00 towards admission-form at SPIT has been processed successfully (via DigitalEdu)', Date.now());
+    expect(e).toMatchObject({ amount: 2520, isExpense: true, merchant: 'SPIT admission-form' });
+  });
 });

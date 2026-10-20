@@ -265,7 +265,7 @@ const KEYWORD_MAP: Array<{
     brands: ['udemy', 'coursera', 'unacademy', 'byjus'],
     keywords: [
       'college', 'university', 'exam', 'fees', 'course',
-      'tuition', 'coaching', 'books', 'stationery', 'library',
+      'tuition', 'coaching', 'books', 'stationery', 'library', 'admission',
     ],
     category: 'Education',
   },
@@ -283,7 +283,7 @@ const KEYWORD_MAP: Array<{
     keywords: [
       'pharmacy', 'chemist', 'hospital', 'clinic',
       'medical', 'doctor', 'dental', 'health', 'medicine', 'lab', 'pathology',
-      'diagnostic',
+      'diagnostic', 'fitness', 'gym',
     ],
     category: 'Health',
   },

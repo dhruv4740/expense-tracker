@@ -350,6 +350,35 @@ const TEMPLATES: Template[] = [
       return n ? n[1] : null;
     },
   },
+  // slice outgoing IMPS/NEFT: "IMPS payment of Rs. X from A/c xx1 done on D to NAME is successful".
+  {
+    re: /^(?:IMPS|NEFT) payment of (?:Rs\.?|INR|₹)\s*[\d,.]+ from A\/c \S+ done on \S+ to (.+?) is successful/i,
+    isExpense: true,
+    merchant: m => m[1],
+  },
+  // UPI Lite top-ups: Lite spends send no per-payment SMS, so the top-up is the spend.
+  // ("... has failed" is rejected by the UPI LITE guard.)
+  {
+    re: /^UPI LITE Top-?up amounting to (?:Rs\.?|INR|₹)\s*[\d,.]+ has been successful/i,
+    isExpense: true,
+    merchant: () => 'UPI Lite',
+  },
+  {
+    re: /^UPI LITE is successfully enabled[\s\S]*? with Top-?Up of (?:Rs\.?|INR|₹)\s*[\d,.]+/i,
+    isExpense: true,
+    merchant: () => 'UPI Lite',
+  },
+  // Merchant receipts with no bank debit SMS of their own (gym, college portal).
+  {
+    re: /\bwe received (?:Rs\.?|INR|₹)\s*[\d,.]+ for invoice[\s\S]*?thank you (.+?)\s*\(/i,
+    isExpense: true,
+    merchant: m => m[1],
+  },
+  {
+    re: /\byour payment of (?:Rs\.?|INR|₹)\s*[\d,.]+ towards (.+?) at (.+?) has been processed successfully/i,
+    isExpense: true,
+    merchant: m => `${m[2]} ${m[1]}`,
+  },
   // Fixed-deposit placement: the user's own money moving into an FD.
   {
     re: /Debited;\s*(?:INR|Rs\.?)\s*[\d,.]+[\s\S]*(?:for FD A\/c|Transfer\/Debit for FD|FD booking)/i,
