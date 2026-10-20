@@ -216,7 +216,7 @@ export async function restoreFromJson(): Promise<{ added: number; total: number 
       category_source:
         raw.category_source === 'manual' ? 'manual' : 'auto',
       channel:
-        channel === 'sms' || channel === 'notification' || channel === 'manual'
+        channel === 'sms' || channel === 'notification' || channel === 'email' || channel === 'manual'
           ? channel
           : null,
     };

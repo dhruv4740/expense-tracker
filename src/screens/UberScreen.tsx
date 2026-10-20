@@ -1,13 +1,16 @@
 // ─── UberScreen ───────────────────────────────────────────────────────────────
 //
-// Current-month Uber transactions, plus average-per-day stats (this month and
-// this ISO week, Monday–Sunday). Reached from the Dashboard's Uber card.
+// One month of Uber rides (month switcher shared with the Dashboard). Summary:
+// Paid, Got back, Your share (= Paid − Got back, straight from getUberSummary).
+// Each ride has an inline one-tap Split; rides still owed money can be linked
+// to a repayment through the ranked suggestion sheet.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   DeviceEventEmitter,
   FlatList,
+  Modal,
   StyleSheet,
   Text,
   TextInput,
@@ -20,7 +23,6 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../App';
 
 import {
-  deleteTransaction,
   getKnownSettlementCounterparties,
   getUberSummary,
   getUnsettledRides,
@@ -29,12 +31,14 @@ import {
   setSettlement,
   updateTransaction,
 } from '../db';
-import type { TransactionRow, UberSummary } from '../db';
-import { suggestSettlements } from '../settle';
+import type { TransactionRow, UberSummary, UnsettledRide } from '../db';
+import { splitOwed, suggestSettlements } from '../settle';
 import type { CandidateTx, Suggestion } from '../settle';
 import { DATA_CHANGED } from '../sync';
-import { AmountText, Card, EmptyState, Icon, SectionHeader } from '../components';
+import { AmountText, Card, EmptyState, Icon, MonthSwitcher } from '../components';
+import { monthRef } from '../components/MonthSwitcher';
 import { theme } from '../theme';
+import { displayMerchant } from '../merchantDisplay';
 import { formatDate, monthRange } from '../dates';
 
 /** Local midnight for `d` (or now). */
@@ -42,66 +46,21 @@ function dayStart(d: Date = new Date()): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 }
 
-/** Monday 00:00 of the week containing `d` (getDay(): 0=Sun..6=Sat). */
-function weekStart(d: Date = new Date()): Date {
-  const start = dayStart(d);
-  const daysSinceMonday = (start.getDay() + 6) % 7;
-  start.setDate(start.getDate() - daysSinceMonday);
-  return start;
-}
-
-const CANDIDATE_DAYS = 30;
 const SUGGESTION_LIMIT = 5;
 
 interface UberData {
   monthRows: TransactionRow[];
   summary: UberSummary;
-  weekSummary: UberSummary;
-  suggestions: Suggestion[];
+  waiting: UnsettledRide[];
 }
 
-function loadUberData(): UberData {
-  const { from, to } = monthRange();
-  const monthRows = queryTransactions({ categories: ['Uber'], from, to });
-  const summary = getUberSummary({ from, to });
-
-  // The current week can start in the previous calendar month (e.g. today is
-  // the 1st/2nd and Monday fell in the prior month) — query it independently
-  // of the month filter above rather than trying to derive it from monthRows.
-  const weekFrom = weekStart().getTime();
-  const weekSummary = getUberSummary({ from: weekFrom, to: Date.now() });
-
-  // Settlement suggestions. This used to be "the 5 most recent credits",
-  // ranked purely by recency with no relation to any ride, which is why
-  // salary and cashback showed up alongside real paybacks. We now score
-  // candidates against rides that actually have money outstanding.
-  //
-  // Note this queries BOTH directions: an outgoing payment settling a ride a
-  // friend paid for is the case the old income-only query could never catch.
-  const rides = getUnsettledRides({ from, to });
-  let suggestions: Suggestion[] = [];
-  if (rides.length > 0) {
-    const candidatesFrom = Date.now() - CANDIDATE_DAYS * 86_400_000;
-    const candidates = queryTransactions({
-      types: ['income', 'expense'],
-      from: candidatesFrom,
-      to: Date.now(),
-    }).filter(r => r.category !== 'Uber' && r.settles_id == null);
-
-    suggestions = suggestSettlements(
-      candidates as CandidateTx[],
-      rides.map(r => ({
-        id: r.id,
-        amount: r.amount,
-        timestamp: r.timestamp,
-        outstanding: r.outstanding,
-      })),
-      { knownCounterparties: getKnownSettlementCounterparties() },
-      SUGGESTION_LIMIT,
-    );
-  }
-
-  return { monthRows, summary, weekSummary, suggestions };
+function loadUberData(offset: number): UberData {
+  const { from, to } = monthRange(monthRef(offset));
+  return {
+    monthRows: queryTransactions({ categories: ['Uber'], from, to }),
+    summary: getUberSummary({ from, to }),
+    waiting: getUnsettledRides({ from, to }),
+  };
 }
 
 function fmt(n: number): string {
@@ -348,10 +307,15 @@ function SplitFareCard() {
 
 export default function UberScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const [data, setData] = useState<UberData>(() => loadUberData());
-  const rows = data.monthRows;
+  const [offset, setOffset] = useState(0);
+  const [data, setData] = useState<UberData>(() => loadUberData(0));
+  const [onlyWaiting, setOnlyWaiting] = useState(false);
+  const [splitFor, setSplitFor] = useState<number | null>(null);
+  const [customN, setCustomN] = useState('');
+  const [repayFor, setRepayFor] = useState<UnsettledRide | null>(null);
+  const [showManual, setShowManual] = useState(false);
 
-  const reload = useCallback(() => setData(loadUberData()), []);
+  const reload = useCallback(() => setData(loadUberData(offset)), [offset]);
   useFocusEffect(reload);
 
   useEffect(() => {
@@ -359,165 +323,234 @@ export default function UberScreen() {
     return () => sub.remove();
   }, [reload]);
 
-  const handlePress = useCallback(
-    (item: TransactionRow) => {
-      navigation.navigate('EditTransaction', { tx: item });
-    },
-    [navigation],
-  );
+  const { summary, monthRows, waiting } = data;
+  const waitingIds = useMemo(() => new Set(waiting.map(w => w.id)), [waiting]);
+  const rows = onlyWaiting ? monthRows.filter(r => r.id != null && waitingIds.has(r.id)) : monthRows;
 
-  const handleLongPress = useCallback(
-    (item: TransactionRow) => {
-      Alert.alert(item.merchant ?? 'Transaction', 'What would you like to do?', [
-        { text: 'Edit', onPress: () => navigation.navigate('EditTransaction', { tx: item }) },
+  // One tap: n people → friends owe (n-1)/n of the fare.
+  const applySplit = useCallback((item: TransactionRow, n: number | null) => {
+    if (item.id == null) {
+      return;
+    }
+    const owed = n != null && n >= 2 ? splitOwed(item.amount, n) : null;
+    const fields: Partial<TransactionRow> = { owed_amount: owed };
+    if (owed != null && !item.note) {
+      fields.note = `Split ₹${fmt(item.amount)} ÷ ${n} — your share`;
+    }
+    updateTransaction(item.id, fields);
+    setSplitFor(null);
+    setCustomN('');
+    DeviceEventEmitter.emit(DATA_CHANGED);
+  }, []);
+
+  // Ranked suggestions for the ride being settled (same scorer as before).
+  const repaySuggestions = useMemo(() => {
+    if (!repayFor) {
+      return [];
+    }
+    const candidates = queryTransactions({
+      types: ['income', 'expense'],
+      from: repayFor.timestamp - 86_400_000,
+      to: Date.now(),
+    }).filter(r => r.category !== 'Uber' && r.settles_id == null);
+    return suggestSettlements(
+      candidates as CandidateTx[],
+      [
         {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            if (item.id != null) {
-              deleteTransaction(item.id);
-              DeviceEventEmitter.emit(DATA_CHANGED);
-            }
-          },
+          id: repayFor.id,
+          amount: repayFor.amount,
+          timestamp: repayFor.timestamp,
+          outstanding: repayFor.outstanding,
         },
-        { text: 'Cancel', style: 'cancel' },
-      ]);
-    },
-    [navigation],
-  );
+      ],
+      { knownCounterparties: getKnownSettlementCounterparties() },
+      SUGGESTION_LIMIT,
+    );
+  }, [repayFor]);
 
-  // Link a suggested payment to the ride it settles. Reversible: the row stays
-  // visible in the transactions list and can be unlinked from its edit screen.
   const linkSettlement = useCallback((s: Suggestion) => {
     const id = s.candidate.id;
     if (id == null) {
       return;
     }
     setSettlement(id, s.ride.id);
+    setRepayFor(null);
     DeviceEventEmitter.emit(DATA_CHANGED);
   }, []);
 
-  const { summary, weekSummary, suggestions } = data;
-
-  // Average per day you actually rode, not per calendar day — riding 15 of
-  // 20 elapsed days divides by 15, so a light month doesn't look misleadingly
-  // cheap-per-day just because you didn't take Uber every day.
-  const avgPerDayMonth = summary.activeDays > 0 ? Math.max(summary.net, 0) / summary.activeDays : 0;
-  const avgPerDayWeek = weekSummary.activeDays > 0 ? Math.max(weekSummary.net, 0) / weekSummary.activeDays : 0;
-
-  // The whole screen scrolls as one FlatList: with the split calculator and
-  // recent-credits sections stacked above the list, a fixed header would
-  // squeeze the transactions into a sliver on smaller screens.
   const header = (
     <>
+      <MonthSwitcher
+        offset={offset}
+        onChange={o => {
+          setOffset(o);
+          setSplitFor(null);
+        }}
+      />
+
       <Card style={styles.totalCard}>
-        <Text style={styles.totalLabel}>Net Uber spend this month</Text>
-        <AmountText
-          amount={Math.abs(summary.net)}
-          type={summary.net >= 0 ? 'expense' : 'income'}
-          size={theme.font.size.xl}
-        />
-        <Text style={styles.totalSub}>
-          {summary.rideCount} ride{summary.rideCount !== 1 ? 's' : ''}
-          {summary.reimbursementCount > 0
-            ? ` · ${summary.reimbursementCount} reimbursement${summary.reimbursementCount !== 1 ? 's' : ''}`
-            : ''}
-        </Text>
-        {summary.reimbursed > 0 && (
-          <Text style={styles.totalSub}>
-            ₹{fmt(summary.spent)} spent · ₹{fmt(summary.reimbursed)} reimbursed
-          </Text>
-        )}
+        <View style={styles.threeRow}>
+          <View style={styles.threeCol}>
+            <Text style={styles.totalLabel}>Paid</Text>
+            <Text style={styles.threeValue}>₹{fmt(summary.spent)}</Text>
+          </View>
+          <View style={styles.threeCol}>
+            <Text style={styles.totalLabel}>Got back</Text>
+            <Text style={styles.threeValue}>₹{fmt(summary.reimbursed)}</Text>
+          </View>
+          <View style={styles.threeCol}>
+            <Text style={styles.totalLabel}>Your share</Text>
+            <Text style={[styles.threeValue, styles.threeStrong]}>₹{fmt(summary.net)}</Text>
+          </View>
+        </View>
       </Card>
 
-      <View style={styles.avgRow}>
-        <Card style={styles.avgCard}>
-          <Text style={styles.avgLabel}>Avg per ride day (month)</Text>
-          <AmountText amount={avgPerDayMonth} type="expense" size={theme.font.size.md} />
-        </Card>
-        <Card style={styles.avgCard}>
-          <Text style={styles.avgLabel}>Avg per ride day (week)</Text>
-          <AmountText amount={avgPerDayWeek} type="expense" size={theme.font.size.md} />
-        </Card>
-      </View>
-
-      <SplitFareCard />
-
-      {suggestions.length > 0 && (
-        <>
-          <SectionHeader title="Settle up" />
-          <Card style={styles.creditsCard}>
-            {suggestions.map(s => (
-              <View key={s.candidate.id} style={styles.creditRow}>
-                <View style={styles.creditMain}>
-                  <Text style={styles.merchant} numberOfLines={1}>
-                    {s.candidate.counterparty ??
-                      s.candidate.merchant ??
-                      'Unknown'}
-                  </Text>
-                  <Text style={styles.date}>
-                    {formatDate(s.candidate.timestamp)}
-                  </Text>
-                  {/* Why this was suggested — the old list gave no reason
-                      because it had none to give. */}
-                  <Text style={styles.reason} numberOfLines={2}>
-                    {s.reason}
-                  </Text>
-                </View>
-                <AmountText
-                  amount={s.candidate.amount}
-                  type={s.candidate.type === 'income' ? 'income' : 'expense'}
-                  size={theme.font.size.sm}
-                />
-                <TouchableOpacity
-                  style={styles.markUberBtn}
-                  onPress={() => linkSettlement(s)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.markUberText}>Link</Text>
-                </TouchableOpacity>
-              </View>
-            ))}
-          </Card>
-        </>
+      {summary.reimbursed > summary.spent && (
+        <Text style={styles.overNote}>
+          Got back is more than the rides captured. Rides paid from Amazon Pay balance only show up if
+          Uber notifications are on (Settings → Apps).
+        </Text>
       )}
 
-      <SectionHeader title="This Month's Transactions" />
+      {waiting.length > 0 && (
+        <TouchableOpacity style={styles.waitingRow} onPress={() => setOnlyWaiting(v => !v)}>
+          <Text style={styles.waitingText}>
+            {waiting.length} ride{waiting.length !== 1 ? 's' : ''} waiting for repayment
+          </Text>
+          <Text style={styles.waitingAction}>{onlyWaiting ? 'Show all' : 'Show'}</Text>
+        </TouchableOpacity>
+      )}
+
+      <TouchableOpacity style={styles.manualToggle} onPress={() => setShowManual(v => !v)}>
+        <Text style={styles.adjustLink}>{showManual ? '▾' : '▸'} Add a ride manually</Text>
+      </TouchableOpacity>
+      {showManual && <SplitFareCard />}
     </>
   );
 
   return (
-    <FlatList
-      style={styles.container}
-      data={rows}
-      keyExtractor={r => String(r.id)}
-      contentContainerStyle={styles.listContent}
-      keyboardShouldPersistTaps="handled"
-      ListHeaderComponent={header}
-      ListEmptyComponent={
-        <EmptyState
-          icon="car"
-          title="No Uber transactions this month"
-          subtitle="Uber rides will show up here once captured from SMS or notifications."
-        />
-      }
-      renderItem={({ item }) => (
-        <TouchableOpacity
-          style={styles.row}
-          onPress={() => handlePress(item)}
-          onLongPress={() => handleLongPress(item)}
-          activeOpacity={0.7}
-        >
-          <View style={styles.rowMain}>
-            <Text style={styles.merchant} numberOfLines={1}>
-              {item.merchant ?? item.counterparty ?? item.source ?? 'Uber'}
-            </Text>
-            <Text style={styles.date}>{formatDate(item.timestamp)}</Text>
+    <>
+      <FlatList
+        style={styles.container}
+        data={rows}
+        keyExtractor={r => String(r.id)}
+        contentContainerStyle={styles.listContent}
+        keyboardShouldPersistTaps="handled"
+        ListHeaderComponent={header}
+        ListEmptyComponent={
+          <EmptyState
+            icon="car"
+            title={onlyWaiting ? 'Nothing waiting for repayment' : 'No Uber transactions this month'}
+            subtitle="Uber rides will show up here once captured from SMS or notifications."
+          />
+        }
+        renderItem={({ item }) => {
+          const isRide = item.type === 'expense' && item.settles_id == null;
+          const open = splitFor === item.id;
+          const wait = item.id != null ? waiting.find(w => w.id === item.id) : undefined;
+          return (
+            <View style={styles.row}>
+              <TouchableOpacity
+                style={styles.rowTop}
+                onPress={() => navigation.navigate('EditTransaction', { tx: item })}
+                activeOpacity={0.7}
+              >
+                <View style={styles.rowMain}>
+                  <Text style={styles.merchant} numberOfLines={1}>
+                    {displayMerchant(item.merchant) ?? item.counterparty ?? item.source ?? 'Uber'}
+                  </Text>
+                  <Text style={styles.date}>
+                    {formatDate(item.timestamp)}
+                    {item.owed_amount ? ` · friends owe ₹${fmt(item.owed_amount)}` : ''}
+                  </Text>
+                </View>
+                <AmountText amount={item.amount} type={item.type} size={theme.font.size.md} />
+              </TouchableOpacity>
+              {isRide && (
+                <View style={styles.rowActions}>
+                  {open ? (
+                    <>
+                      {[2, 3, 4].map(n => (
+                        <TouchableOpacity key={n} style={styles.chip} onPress={() => applySplit(item, n)}>
+                          <Text style={styles.chipText}>÷{n}</Text>
+                        </TouchableOpacity>
+                      ))}
+                      <TextInput
+                        style={styles.customInput}
+                        value={customN}
+                        onChangeText={setCustomN}
+                        keyboardType="number-pad"
+                        placeholder="n"
+                        placeholderTextColor={theme.colors.textMuted}
+                        onSubmitEditing={() => applySplit(item, parseInt(customN, 10) || null)}
+                        maxLength={2}
+                      />
+                      {item.owed_amount ? (
+                        <TouchableOpacity style={styles.chip} onPress={() => applySplit(item, null)}>
+                          <Text style={styles.chipText}>Clear</Text>
+                        </TouchableOpacity>
+                      ) : null}
+                    </>
+                  ) : (
+                    <TouchableOpacity onPress={() => setSplitFor(item.id ?? null)}>
+                      <Text style={styles.adjustLink}>{item.owed_amount ? 'Change split' : 'Split'}</Text>
+                    </TouchableOpacity>
+                  )}
+                  {wait && !open && (
+                    <TouchableOpacity onPress={() => setRepayFor(wait)}>
+                      <Text style={styles.adjustLink}>Link repayment</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
+            </View>
+          );
+        }}
+      />
+
+      <Modal
+        visible={repayFor != null}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setRepayFor(null)}
+      >
+        <View style={styles.overlay}>
+          <View style={styles.sheet}>
+            <Text style={styles.splitTitle}>Who paid you back?</Text>
+            {repaySuggestions.length === 0 ? (
+              <Text style={styles.date}>No likely payment found yet.</Text>
+            ) : (
+              repaySuggestions.map(s => (
+                <TouchableOpacity
+                  key={s.candidate.id}
+                  style={styles.creditRow}
+                  onPress={() => linkSettlement(s)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.creditMain}>
+                    <Text style={styles.merchant} numberOfLines={1}>
+                      {s.candidate.counterparty ?? displayMerchant(s.candidate.merchant) ?? 'Unknown'}
+                    </Text>
+                    <Text style={styles.date}>{formatDate(s.candidate.timestamp)}</Text>
+                    <Text style={styles.reason} numberOfLines={2}>
+                      {s.reason}
+                    </Text>
+                  </View>
+                  <AmountText
+                    amount={s.candidate.amount}
+                    type={s.candidate.type === 'income' ? 'income' : 'expense'}
+                    size={theme.font.size.sm}
+                  />
+                </TouchableOpacity>
+              ))
+            )}
+            <TouchableOpacity onPress={() => setRepayFor(null)}>
+              <Text style={styles.adjustLink}>Close</Text>
+            </TouchableOpacity>
           </View>
-          <AmountText amount={item.amount} type={item.type} size={theme.font.size.md} />
-        </TouchableOpacity>
-      )}
-    />
+        </View>
+      </Modal>
+    </>
   );
 }
 
@@ -529,47 +562,79 @@ const styles = StyleSheet.create({
   totalCard: {
     margin: theme.spacing.lg,
     marginBottom: 0,
-    alignItems: 'center',
     padding: theme.spacing.lg,
-    gap: theme.spacing.xs,
   },
+  threeRow: { flexDirection: 'row' },
+  threeCol: { flex: 1, alignItems: 'center', gap: 2 },
+  threeValue: {
+    fontSize: theme.font.size.md,
+    color: theme.colors.textPrimary,
+    fontWeight: theme.font.weight.medium,
+  },
+  threeStrong: { color: theme.colors.accent, fontWeight: theme.font.weight.bold },
   totalLabel: {
-    fontSize: theme.font.size.sm,
+    fontSize: theme.font.size.xs,
     color: theme.colors.textSecondary,
   },
-  totalSub: {
+  overNote: {
+    marginHorizontal: theme.spacing.lg,
+    marginTop: theme.spacing.sm,
     fontSize: theme.font.size.xs,
     color: theme.colors.textMuted,
   },
-  avgRow: {
+  waitingRow: {
     flexDirection: 'row',
-    gap: theme.spacing.sm,
-    margin: theme.spacing.lg,
-    marginBottom: 0,
-  },
-  avgCard: {
-    flex: 1,
+    justifyContent: 'space-between',
     alignItems: 'center',
-    padding: theme.spacing.md,
-    gap: 4,
+    marginHorizontal: theme.spacing.lg,
+    marginTop: theme.spacing.md,
   },
-  avgLabel: {
-    fontSize: theme.font.size.xs,
-    color: theme.colors.textSecondary,
-    textAlign: 'center',
+  waitingText: { fontSize: theme.font.size.sm, color: theme.colors.textSecondary },
+  waitingAction: {
+    fontSize: theme.font.size.sm,
+    color: theme.colors.accent,
+    fontWeight: theme.font.weight.semibold,
   },
+  manualToggle: { marginHorizontal: theme.spacing.lg, marginTop: theme.spacing.md },
   listContent: {
     paddingBottom: theme.spacing.xl,
   },
   row: {
+    marginHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+  },
+  rowTop: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.colors.border,
     gap: theme.spacing.sm,
+  },
+  rowActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.lg,
+    marginTop: theme.spacing.xs,
+  },
+  chip: {
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: 4,
+    borderRadius: theme.radius.pill,
+    backgroundColor: theme.colors.accent + '22',
+  },
+  chipText: {
+    fontSize: theme.font.size.sm,
+    color: theme.colors.accent,
+    fontWeight: theme.font.weight.semibold,
+  },
+  customInput: {
+    width: 44,
+    paddingVertical: 2,
+    textAlign: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+    color: theme.colors.textPrimary,
   },
   rowMain: {
     flex: 1,
@@ -588,10 +653,18 @@ const styles = StyleSheet.create({
     fontSize: theme.font.size.xs,
     color: theme.colors.accent,
   },
-  creditsCard: {
-    marginHorizontal: theme.spacing.lg,
-    padding: theme.spacing.md,
-    gap: theme.spacing.sm,
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: theme.colors.surface,
+    borderTopLeftRadius: theme.radius.lg,
+    borderTopRightRadius: theme.radius.lg,
+    padding: theme.spacing.lg,
+    paddingBottom: 40,
+    gap: theme.spacing.md,
   },
   creditRow: {
     flexDirection: 'row',
@@ -601,17 +674,6 @@ const styles = StyleSheet.create({
   creditMain: {
     flex: 1,
     gap: 2,
-  },
-  markUberBtn: {
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: 6,
-    borderRadius: theme.radius.sm,
-    backgroundColor: theme.colors.accent + '22',
-  },
-  markUberText: {
-    fontSize: theme.font.size.xs,
-    fontWeight: theme.font.weight.semibold,
-    color: theme.colors.accent,
   },
   splitCard: {
     margin: theme.spacing.lg,
@@ -665,7 +727,7 @@ const styles = StyleSheet.create({
     color: theme.colors.textPrimary,
   },
   adjustLink: {
-    fontSize: theme.font.size.xs,
+    fontSize: theme.font.size.sm,
     color: theme.colors.accent,
     fontWeight: theme.font.weight.medium,
   },

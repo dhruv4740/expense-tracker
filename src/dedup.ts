@@ -6,7 +6,8 @@
 // This file has zero such imports.
 
 /** Capture channel — used only for cross-channel soft dedup (see isSoftDuplicate). */
-export type Channel = 'sms' | 'notification' | 'manual';
+/** 'email' = a Gmail notification (Amazon Pay wallet top-ups only). */
+export type Channel = 'sms' | 'notification' | 'email' | 'manual';
 
 // djb2 hash — no external deps
 export function hash(s: string): string {
@@ -29,6 +30,11 @@ export function strictDedupKey(tx: {
   );
 }
 
+/** Channels that take part in cross-channel soft dedup (manual / NULL never do). */
+function isCapturedChannel(c: Channel | null | undefined): boolean {
+  return c === 'sms' || c === 'notification' || c === 'email';
+}
+
 /**
  * Pure mirror of the soft cross-channel dedup predicate embedded in the SQL
  * query inside db.ts's insertTransaction() — kept here so it's unit-testable
@@ -44,13 +50,13 @@ export function isSoftDuplicate(
   incoming: { amount: number; timestamp: number; channel: Channel | null | undefined; counterparty: string | null | undefined },
   existing: { amount: number; timestamp: number; channel: Channel | null | undefined; counterparty: string | null | undefined },
 ): boolean {
-  if (incoming.channel !== 'sms' && incoming.channel !== 'notification') {
+  if (!isCapturedChannel(incoming.channel)) {
     return false;
   }
   if (existing.channel == null || existing.channel === incoming.channel) {
     return false;
   }
-  if (existing.channel !== 'sms' && existing.channel !== 'notification') {
+  if (!isCapturedChannel(existing.channel)) {
     return false;
   }
   if (existing.amount !== incoming.amount) {

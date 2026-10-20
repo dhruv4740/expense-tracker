@@ -35,16 +35,6 @@ const BarsChart = React.memo(function BarsChart({
     [data],
   );
 
-  if (!hasData) {
-    return (
-      <EmptyState
-        icon="stats"
-        title="No comparison data"
-        subtitle="Category totals will appear here once transactions are captured."
-      />
-    );
-  }
-
   const chartData = useMemo(
     () =>
       data.map(item => ({
@@ -55,6 +45,16 @@ const BarsChart = React.memo(function BarsChart({
       })),
     [data],
   );
+
+  if (!hasData) {
+    return (
+      <EmptyState
+        icon="stats"
+        title="No comparison data"
+        subtitle="Category totals will appear here once transactions are captured."
+      />
+    );
+  }
 
   return (
     <View style={styles.container}>

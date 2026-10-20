@@ -33,16 +33,17 @@ The naive "emit to JS on every event" path is intentionally NOT the primary path
 - Source: sender ID (e.g. HDFCBK, ICICIB, Paytm)
 - Timestamp: system time at intercept (single read shared by buffer + live emit)
 
-## DB Schema (v3 — see RULES.md §4 for full migration history)
+## DB Schema (v4 — see RULES.md §4 for full migration history)
 transactions(id, amount, merchant, source, raw_text, category, timestamp, type,
-  counterparty, account, note, category_source, channel, dedup_key UNIQUE)
+  counterparty, account, note, category_source, channel, settles_id, owed_amount, dedup_key UNIQUE)
 - `type`: 'expense' | 'income' | 'self'
 - `channel`: 'sms' | 'notification' | 'manual' | NULL (NULL for all pre-v3 history) — used only for cross-channel soft dedup
+- `settles_id` links a repayment/refund to its parent; opposite-direction children net the parent's effective amount (`EFFECTIVE_AMOUNT` in db.ts). `owed_amount` = others' share of a split (Uber)
 - `dedup_key` = hash(source + amount + minute-bucket + raw_text); insert with `INSERT OR IGNORE` for idempotency (strict, always applies)
 - Soft cross-channel dedup (separate from dedup_key): drops an incoming row only when an existing row's channel is known and different from the incoming one — same-channel repeats are always kept
 - indices on timestamp, category, type; WAL mode
-- auxiliary tables: app_settings (key/value incl. per-account balances), merchant_rules (learned categorization), budgets
-categories: Food, Groceries, Transport, Uber, Shopping, Bills, Entertainment, Health, Investment, Education, UPI, Cash, Income, Friend Transfer, Loan/Dues, Other (auto-assign by keyword, editable; Uber checked before Transport, Investment/Education checked before Bills/UPI). Grouped for display (Essentials/Transport/Lifestyle/Education/Transfers/Investments/Income/Other) via `groupOf()` in categories.ts — display-only, no DB column. Investment is excluded from spend totals (tracked separately as `invested`).
+- auxiliary tables: app_settings (key/value; legacy `__balance__*` rows are inert), merchant_rules (learned categorization), budgets
+categories: Food, Groceries, Transport, Uber, Shopping, Bills, Entertainment, Health, Investment, Education, UPI, Cash, Income, Family, Friend Transfer, Loan/Dues, Other (auto-assign by keyword, editable; Uber checked before Transport, Investment/Education checked before Bills/UPI). Grouped for display (Essentials/Transport/Lifestyle/Education/Transfers/Investments/Income/Other) via `groupOf()` in categories.ts — display-only, no DB column. Investment is excluded from spend totals (tracked separately as `invested`). Family is income from `family_members` (Settings) and shows as "From family"; type/category come from `classify()` in classify.ts (shared by sync and Re-check). Balance estimation was removed. Own-account transfers auto-pair — see RULES.md §4b.
 
 ## Permissions needed
 - android.permission.RECEIVE_SMS

@@ -34,6 +34,11 @@ export interface TransactionRow {
   settles_id?: number | null;
   /** On a split expense: how much the user expects to be paid back. */
   owed_amount?: number | null;
+  /**
+   * Read-only, set by queryTransactions: total of opposite-direction rows linked
+   * to this one via settles_id (see NETTING_JOIN). Undefined/0 when none.
+   */
+  paid_back?: number;
 }
 
 export interface Range {
@@ -48,6 +53,10 @@ export interface Summary {
   /** Sum of expense-type Investment-category transactions in the range —
    * tracked separately since SIPs/mutual funds aren't "spending". */
   invested: number;
+  /** Family-category income in the range (netted like `received`). */
+  fromFamily: number;
+  /** `received` without Family credits: salary, refunds, interest, etc. */
+  earned: number;
   /**
    * Net money moved to/from other people (Friend Transfer, Loan/Dues) in the
    * range: positive = you paid out more than you got back. Excluded from
@@ -62,7 +71,7 @@ export interface Summary {
 export interface UberSummary {
   spent: number;
   reimbursed: number;
-  /** spent - reimbursed. Can go negative if reimbursements exceed spend. */
+  /** max(spent - reimbursed, 0): credits tagged Uber can exceed the rides captured. */
   net: number;
   rideCount: number;
   reimbursementCount: number;
@@ -285,12 +294,12 @@ export function insertTransaction(
   //    (bank SMS often lack one) — if BOTH are known and differ, it's a
   //    different payment, not a duplicate.
   // Manual entries are deliberate user actions and never soft-deduped.
-  if (!options.skipSoftDedup && (tx.channel === 'sms' || tx.channel === 'notification')) {
+  if (!options.skipSoftDedup && (tx.channel === 'sms' || tx.channel === 'notification' || tx.channel === 'email')) {
     const existing = conn.executeSync(
       `SELECT 1 FROM transactions
         WHERE amount = ?
           AND ABS(timestamp - ?) < 120000
-          AND channel IS NOT NULL AND channel != ? AND channel IN ('sms', 'notification')
+          AND channel IS NOT NULL AND channel != ? AND channel IN ('sms', 'notification', 'email')
           AND (counterparty IS NULL OR ? IS NULL OR counterparty = ?)
         LIMIT 1`,
       [tx.amount, tx.timestamp, tx.channel, tx.counterparty ?? null, tx.counterparty ?? null],
@@ -510,10 +519,56 @@ export function queryTransactions(
     ' ORDER BY timestamp DESC';
 
   const res = conn.executeSync(sql, params);
-  return (res.rows ?? []).map(mapRow);
+  const rows = (res.rows ?? []).map(mapRow);
+  const paid = getPaidBackByParent();
+  for (const r of rows) {
+    const p = r.id != null ? paid.get(r.id) : undefined;
+    if (p) {
+      r.paid_back = p;
+    }
+  }
+  return rows;
+}
+
+/** parent id -> total of opposite-direction rows linked to it. */
+export function getPaidBackByParent(): Map<number, number> {
+  const conn = requireDb();
+  const res = conn.executeSync(
+    `SELECT c.settles_id AS pid, SUM(c.amount) AS paid
+       FROM transactions c
+       JOIN transactions p ON p.id = c.settles_id
+      WHERE c.type IN ('expense', 'income') AND p.type IN ('expense', 'income')
+        AND c.type != p.type
+      GROUP BY c.settles_id`,
+  );
+  const out = new Map<number, number>();
+  for (const r of res.rows ?? []) {
+    out.set(Number(r.pid), Number(r.paid ?? 0));
+  }
+  return out;
 }
 
 // ─── aggregation (in SQL — never .map over all rows) ──────────────────────────
+
+/**
+ * Pair-to-cancel netting. A row linked via settles_id to an OPPOSITE-direction
+ * parent (an income that repays an expense, or an expense that returns an
+ * income) reduces that parent: effective = MAX(amount - paid, 0). The settling
+ * rows themselves stay excluded from every total. Same-direction links (the
+ * Uber "repayment" mode) exclude the child but do not reduce the parent.
+ * Joined as `t` (parent) / `k` (paid-back totals). The math is mirrored in
+ * src/netting.ts, which is what the unit tests exercise.
+ */
+const NETTING_JOIN = `LEFT JOIN (
+        SELECT c.settles_id AS pid, SUM(c.amount) AS paid, COUNT(*) AS n
+          FROM transactions c
+          JOIN transactions p ON p.id = c.settles_id
+         WHERE c.type IN ('expense', 'income')
+           AND p.type IN ('expense', 'income')
+           AND c.type != p.type
+         GROUP BY c.settles_id
+      ) k ON k.pid = t.id`;
+const EFFECTIVE_AMOUNT = 'MAX(t.amount - COALESCE(k.paid, 0), 0)';
 
 /**
  * Spent (expense) / received (income) / net + per-category and per-day spend
@@ -530,18 +585,23 @@ export function getSummary(range: Range): Summary {
   // categories, which are reported separately as `transferred`.
   const totalsRes = conn.executeSync(
     `SELECT
-        COALESCE(SUM(CASE WHEN type = 'income'
-                           AND settles_id IS NULL
-                           AND category NOT IN (${NON_SPEND_PLACEHOLDERS})
-                          THEN amount END), 0) AS received,
-        COALESCE(SUM(CASE WHEN type = 'expense' AND category = ?
-                          THEN amount END), 0) AS invested,
-        COALESCE(SUM(CASE WHEN category IN (${TRANSFER_CATEGORIES.map(() => '?').join(', ')})
-                           AND type IN ('expense', 'income')
-                          THEN CASE WHEN type = 'expense' THEN amount ELSE -amount END
+        COALESCE(SUM(CASE WHEN t.type = 'income'
+                           AND t.settles_id IS NULL
+                           AND t.category NOT IN (${NON_SPEND_PLACEHOLDERS})
+                          THEN ${EFFECTIVE_AMOUNT} END), 0) AS received,
+        COALESCE(SUM(CASE WHEN t.type = 'expense' AND t.category = ?
+                          THEN t.amount END), 0) AS invested,
+        COALESCE(SUM(CASE WHEN t.type = 'income'
+                           AND t.settles_id IS NULL
+                           AND t.category = 'Family'
+                          THEN ${EFFECTIVE_AMOUNT} END), 0) AS fromFamily,
+        COALESCE(SUM(CASE WHEN t.category IN (${TRANSFER_CATEGORIES.map(() => '?').join(', ')})
+                           AND t.type IN ('expense', 'income')
+                          THEN CASE WHEN t.type = 'expense' THEN t.amount ELSE -t.amount END
                      END), 0) AS transferred
-       FROM transactions
-      WHERE timestamp BETWEEN ? AND ?`,
+       FROM transactions t
+       ${NETTING_JOIN}
+      WHERE t.timestamp BETWEEN ? AND ?`,
     [
       ...NON_SPEND_CATEGORIES,
       INVESTMENT_CATEGORY,
@@ -553,6 +613,7 @@ export function getSummary(range: Range): Summary {
   const totRow = (totalsRes.rows ?? [])[0] ?? {};
   const received = Number(totRow.received ?? 0);
   const invested = Number(totRow.invested ?? 0);
+  const fromFamily = Number(totRow.fromFamily ?? 0);
   const transferred = Number(totRow.transferred ?? 0);
 
   // Nets income against expense within the same category (e.g. a debit and a
@@ -561,16 +622,17 @@ export function getSummary(range: Range): Summary {
   // Investment is excluded here (and from spent/byDay) so SIPs/mutual funds
   // don't count as "spending" — see the separate `invested` total above.
   const catRes = conn.executeSync(
-    `SELECT category,
-            SUM(CASE WHEN type = 'expense' THEN amount
-                     WHEN type = 'income'  THEN -amount
+    `SELECT t.category AS category,
+            SUM(CASE WHEN t.type = 'expense' THEN ${EFFECTIVE_AMOUNT}
+                     WHEN t.type = 'income'  THEN -${EFFECTIVE_AMOUNT}
                      ELSE 0 END) AS total
-       FROM transactions
-      WHERE type IN ('expense', 'income')
-        AND settles_id IS NULL
-        AND category NOT IN (${NON_SPEND_PLACEHOLDERS})
-        AND timestamp BETWEEN ? AND ?
-      GROUP BY category
+       FROM transactions t
+       ${NETTING_JOIN}
+      WHERE t.type IN ('expense', 'income')
+        AND t.settles_id IS NULL
+        AND t.category NOT IN (${NON_SPEND_PLACEHOLDERS})
+        AND t.timestamp BETWEEN ? AND ?
+      GROUP BY t.category
       ORDER BY total DESC`,
     [...NON_SPEND_CATEGORIES, from, to],
   );
@@ -600,12 +662,14 @@ export function getSummary(range: Range): Summary {
   // with localDayIndexToDate() when rendering labels.
   const tzOffsetMs = localTzOffsetMs();
   const dayRes = conn.executeSync(
-    `SELECT CAST((timestamp + ?) / 86400000 AS INTEGER) AS day, SUM(amount) AS total
-       FROM transactions
-      WHERE type = 'expense'
-        AND settles_id IS NULL
-        AND category NOT IN (${NON_SPEND_PLACEHOLDERS})
-        AND timestamp BETWEEN ? AND ?
+    `SELECT CAST((t.timestamp + ?) / 86400000 AS INTEGER) AS day,
+            SUM(${EFFECTIVE_AMOUNT}) AS total
+       FROM transactions t
+       ${NETTING_JOIN}
+      WHERE t.type = 'expense'
+        AND t.settles_id IS NULL
+        AND t.category NOT IN (${NON_SPEND_PLACEHOLDERS})
+        AND t.timestamp BETWEEN ? AND ?
       GROUP BY day
       ORDER BY day ASC`,
     [tzOffsetMs, ...NON_SPEND_CATEGORIES, from, to],
@@ -620,6 +684,8 @@ export function getSummary(range: Range): Summary {
     received,
     net: received - spent,
     invested,
+    fromFamily,
+    earned: Math.max(received - fromFamily, 0),
     transferred,
     byCategory,
     byDay,
@@ -637,13 +703,12 @@ export function getUberSummary(range: Range): UberSummary {
   const { from, to } = range;
 
   // Rides = Uber-category expenses that are NOT themselves settling something.
-  // Reimbursements come from two places:
-  //   1. rows explicitly linked via settles_id to a ride in range (any
-  //      category — a friend's payback usually lands in Friend Transfer/UPI,
-  //      not Uber, which is exactly why category-only netting missed it); and
-  //   2. legacy: income hand-tagged 'Uber' with no link, which is how every
-  //      pre-v4 reimbursement is recorded. Kept so existing history keeps
-  //      netting exactly as it did before the migration.
+  // Reimbursed uses the same pair-to-cancel rule as getSummary (so the Uber card
+  // and the Dashboard donut always agree): per ride, the income rows linked via
+  // settles_id, capped at the ride's amount; plus legacy income hand-tagged
+  // 'Uber' with no link (every pre-v4 reimbursement), net of anything that
+  // itself cancels it. Same-direction links never reduce a ride in the Dashboard
+  // totals, but legacy ones still count as reimbursed on this card (last branch).
   const totalsRes = conn.executeSync(
     `SELECT
         COALESCE(SUM(CASE WHEN type = 'expense' THEN amount END), 0) AS spent,
@@ -655,21 +720,34 @@ export function getUberSummary(range: Range): UberSummary {
   );
 
   const reimbRes = conn.executeSync(
-    `SELECT COALESCE(SUM(amount), 0) AS reimbursed, COUNT(*) AS reimbursementCount
+    `SELECT COALESCE(SUM(amount), 0) AS reimbursed, COALESCE(SUM(n), 0) AS reimbursementCount
        FROM (
-         SELECT s.amount AS amount
+         SELECT MIN(k.paid, t.amount) AS amount, k.n AS n
+           FROM transactions t
+           ${NETTING_JOIN}
+          WHERE t.category = 'Uber' AND t.type = 'expense'
+            AND t.settles_id IS NULL
+            AND k.pid IS NOT NULL
+            AND t.timestamp BETWEEN ? AND ?
+         UNION ALL
+         SELECT ${EFFECTIVE_AMOUNT} AS amount,
+                CASE WHEN ${EFFECTIVE_AMOUNT} > 0 THEN 1 ELSE 0 END AS n
+           FROM transactions t
+           ${NETTING_JOIN}
+          WHERE t.category = 'Uber' AND t.type = 'income'
+            AND t.settles_id IS NULL AND t.timestamp BETWEEN ? AND ?
+         UNION ALL
+         -- Legacy same-direction links (Uber "repayment" mode: an expense row
+         -- linked to a ride). Counted in full as before, so existing Uber
+         -- numbers do not move now that netting is opposite-direction only.
+         SELECT s.amount AS amount, 1 AS n
            FROM transactions s
            JOIN transactions ride ON ride.id = s.settles_id
-          WHERE ride.category = 'Uber'
-            AND ride.type = 'expense'
+          WHERE ride.category = 'Uber' AND ride.type = 'expense'
+            AND s.type = 'expense'
             AND ride.timestamp BETWEEN ? AND ?
-         UNION ALL
-         SELECT amount
-           FROM transactions
-          WHERE category = 'Uber' AND type = 'income'
-            AND settles_id IS NULL AND timestamp BETWEEN ? AND ?
        )`,
-    [from, to, from, to],
+    [from, to, from, to, from, to],
   );
   const totRow = (totalsRes.rows ?? [])[0] ?? {};
   const reimbRow = (reimbRes.rows ?? [])[0] ?? {};
@@ -688,7 +766,7 @@ export function getUberSummary(range: Range): UberSummary {
   );
   const activeDays = Number((activeDaysRes.rows ?? [])[0]?.activeDays ?? 0);
 
-  return { spent, reimbursed, net: spent - reimbursed, rideCount, reimbursementCount, activeDays };
+  return { spent, reimbursed, net: Math.max(spent - reimbursed, 0), rideCount, reimbursementCount, activeDays };
 }
 
 /**
@@ -703,7 +781,7 @@ export function getUnsettledRides(range: Range): UnsettledRide[] {
   const res = conn.executeSync(
     `SELECT r.id, r.amount, r.timestamp, r.owed_amount,
             COALESCE((SELECT SUM(s.amount) FROM transactions s
-                       WHERE s.settles_id = r.id), 0) AS settled
+                       WHERE s.settles_id = r.id AND s.type = 'income'), 0) AS settled
        FROM transactions r
       WHERE r.category = 'Uber' AND r.type = 'expense'
         AND r.settles_id IS NULL
@@ -735,6 +813,60 @@ export function getUnsettledRides(range: Range): UnsettledRide[] {
  */
 export function setSettlement(id: number, settlesId: number | null): boolean {
   return updateTransaction(id, { settles_id: settlesId });
+}
+
+/** Rows linked to `id` (its settlers) and, if `id` itself settles one, that parent. */
+export function getSettlementLinks(id: number): {
+  children: TransactionRow[];
+  parent: TransactionRow | null;
+} {
+  const conn = requireDb();
+  const kids = conn.executeSync(
+    'SELECT * FROM transactions WHERE settles_id = ? ORDER BY timestamp ASC',
+    [id],
+  );
+  const me = conn.executeSync(
+    'SELECT settles_id FROM transactions WHERE id = ? LIMIT 1',
+    [id],
+  );
+  const pid = (me.rows ?? [])[0]?.settles_id;
+  let parent: TransactionRow | null = null;
+  if (pid != null) {
+    const pr = conn.executeSync('SELECT * FROM transactions WHERE id = ? LIMIT 1', [Number(pid)]);
+    const row = (pr.rows ?? [])[0];
+    parent = row ? mapRow(row) : null;
+  }
+  return { children: (kids.rows ?? []).map(mapRow), parent };
+}
+
+/**
+ * Candidate rows that could cancel `parent`: opposite direction, unlinked, not
+ * self/Investment, not themselves a parent of something, and within the
+ * no earlier than 12h before it (no upper time limit — recency only ranks).
+ * Scoring happens in settle.suggestPairs; this only narrows the set in SQL.
+ */
+export function getPairCandidates(parent: {
+  id: number;
+  type: 'expense' | 'income';
+  timestamp: number;
+}): TransactionRow[] {
+  const conn = requireDb();
+  const res = conn.executeSync(
+    `SELECT * FROM transactions c
+      WHERE c.type = ? AND c.id != ?
+        AND c.settles_id IS NULL
+        AND c.category != 'Investment'
+        AND c.timestamp >= ?
+        AND NOT EXISTS (SELECT 1 FROM transactions x WHERE x.settles_id = c.id)
+      ORDER BY c.timestamp ASC
+      LIMIT 2000`,
+    [
+      parent.type === 'expense' ? 'income' : 'expense',
+      parent.id,
+      parent.timestamp - 12 * 3600_000,
+    ],
+  );
+  return (res.rows ?? []).map(mapRow);
 }
 
 /**
@@ -851,6 +983,61 @@ export function setBudget(category: string, monthlyLimit: number): void {
   );
 }
 
+// ─── settings suggestions (aggregates; shaped by src/suggestions.ts) ──────────
+
+/** Distinct own-account fragments seen on stored rows, with message counts. */
+export function getAccountCounts(): { account: string; count: number }[] {
+  const conn = requireDb();
+  const res = conn.executeSync(
+    `SELECT account, COUNT(*) AS n FROM transactions
+      WHERE account IS NOT NULL AND account != ''
+      GROUP BY account ORDER BY n DESC`,
+  );
+  return (res.rows ?? []).map(r => ({
+    account: String(r.account),
+    count: Number(r.n ?? 0),
+  }));
+}
+
+/** Income merchants/counterparties by all-time total (self transfers excluded). */
+export function getIncomeSources(
+  limit = 200,
+): { merchant: string | null; counterparty: string | null; total: number }[] {
+  const conn = requireDb();
+  const res = conn.executeSync(
+    `SELECT merchant, counterparty, SUM(amount) AS total FROM transactions
+      WHERE type = 'income'
+      GROUP BY merchant, counterparty ORDER BY total DESC LIMIT ?`,
+    [limit],
+  );
+  return (res.rows ?? []).map(r => ({
+    merchant: r.merchant != null ? String(r.merchant) : null,
+    counterparty: r.counterparty != null ? String(r.counterparty) : null,
+    total: Number(r.total ?? 0),
+  }));
+}
+
+/** Like getIncomeSources but over income AND expense rows (for the Friends suggestions). */
+export function getPeopleSources(
+  limit = 200,
+): { merchant: string | null; counterparty: string | null; total: number; upi: boolean }[] {
+  const conn = requireDb();
+  const res = conn.executeSync(
+    `SELECT merchant, counterparty, SUM(amount) AS total,
+              MAX(CASE WHEN raw_text LIKE '%UPI%' OR counterparty LIKE '%@%' THEN 1 ELSE 0 END) AS upi
+         FROM transactions
+      WHERE type IN ('income', 'expense')
+      GROUP BY merchant, counterparty ORDER BY total DESC LIMIT ?`,
+    [limit],
+  );
+  return (res.rows ?? []).map(r => ({
+    merchant: r.merchant != null ? String(r.merchant) : null,
+    counterparty: r.counterparty != null ? String(r.counterparty) : null,
+    total: Number(r.total ?? 0),
+    upi: Number(r.upi ?? 0) === 1,
+  }));
+}
+
 // ─── key/value settings store ─────────────────────────────────────────────────
 
 export function getSetting(key: string): string | null {
@@ -871,51 +1058,6 @@ export function setSetting(key: string, value: string): void {
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     [key, value],
   );
-}
-
-// ─── Account balance (best-effort, last-known from SMS "Avl Bal") ─────────────
-
-const BALANCE_PREFIX = '__balance__';
-
-/** Returns the last-known balance (INR) for an account (keyed by last-4 digits or source). */
-export function getAccountBalance(accountKey: string): { balance: number; updatedAt: number } | null {
-  const raw = getSetting(`${BALANCE_PREFIX}${accountKey}`);
-  if (!raw) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(raw) as { balance: number; updatedAt: number };
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-/** Store the last-known balance for an account; only updates if newer than stored value. */
-export function setAccountBalance(accountKey: string, balance: number, ts: number): void {
-  const existing = getAccountBalance(accountKey);
-  if (existing && existing.updatedAt >= ts) {
-    return; // don't overwrite with older data
-  }
-  setSetting(`${BALANCE_PREFIX}${accountKey}`, JSON.stringify({ balance, updatedAt: ts }));
-}
-
-/** Return all stored balances as a flat array. */
-export function getAllAccountBalances(): { account: string; balance: number; updatedAt: number }[] {
-  const conn = requireDb();
-  const res = conn.executeSync(
-    `SELECT key, value FROM app_settings WHERE key LIKE '${BALANCE_PREFIX}%'`,
-    [],
-  );
-  return (res.rows ?? []).map(row => {
-    const key = String(row.key ?? '').slice(BALANCE_PREFIX.length);
-    try {
-      const val = JSON.parse(String(row.value ?? '{}')) as { balance: number; updatedAt: number };
-      return { account: key, balance: val.balance, updatedAt: val.updatedAt };
-    } catch {
-      return { account: key, balance: 0, updatedAt: 0 };
-    }
-  });
 }
 
 // ─── Recurring detection ──────────────────────────────────────────────────────
@@ -966,12 +1108,47 @@ export function getRecurring(range: Range, minOccurrences = 2): RecurringEntry[]
   });
 }
 
-/** Count transactions with category='Other' (the uncategorized review queue). */
-export function getUncategorizedCount(): number {
+/** Count transactions with category='Other' (the uncategorized review queue) within `range`. */
+export function getUncategorizedCount(range: Range): number {
   const conn = requireDb();
   const res = conn.executeSync(
-    `SELECT COUNT(*) AS cnt FROM transactions WHERE category = 'Other' AND type = 'expense'`,
-    [],
+    `SELECT COUNT(*) AS cnt FROM transactions WHERE category = 'Other' AND type = 'expense'
+       AND timestamp >= ? AND timestamp <= ?`,
+    [range.from, range.to],
   );
   return Number((res.rows ?? [])[0]?.cnt ?? 0);
+}
+
+// ─── transfer pairing support ────────────────────────────────────────────────
+
+/** Highest row id (0 when empty). Rows inserted after a snapshot have id > it. */
+export function getMaxTransactionId(): number {
+  const conn = requireDb();
+  const res = conn.executeSync('SELECT MAX(id) AS m FROM transactions');
+  return Number((res.rows ?? [])[0]?.m ?? 0);
+}
+
+/** Raw rows with timestamp in [from, to], oldest first (no netting columns). */
+export function getTransactionsBetween(from: number, to: number): TransactionRow[] {
+  const conn = requireDb();
+  const res = conn.executeSync(
+    'SELECT * FROM transactions WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp ASC',
+    [from, to],
+  );
+  return (res.rows ?? []).map(mapRow);
+}
+
+/** Raw rows inserted after `afterId`. */
+export function getTransactionsAfterId(afterId: number): TransactionRow[] {
+  const conn = requireDb();
+  const res = conn.executeSync('SELECT * FROM transactions WHERE id > ? ORDER BY id ASC', [afterId]);
+  return (res.rows ?? []).map(mapRow);
+}
+
+/** One raw row by id, or null. */
+export function getTransactionById(id: number): TransactionRow | null {
+  const conn = requireDb();
+  const res = conn.executeSync('SELECT * FROM transactions WHERE id = ? LIMIT 1', [id]);
+  const row = (res.rows ?? [])[0];
+  return row ? mapRow(row) : null;
 }

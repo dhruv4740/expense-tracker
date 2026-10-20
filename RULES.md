@@ -72,6 +72,16 @@ Single source of truth so Agents A and B can build independently.
   bank SMS by chatty days, and less sensitive data sitting in SharedPreferences. No allowlist
   prefs read on this path on purpose (sender IDs vary too much to allowlist, and reading prefs
   would add I/O to a path that must stay minimal).
+- **Gmail exception (narrow, hard-coded).** `com.google.android.gm` is NOT in the allowlist or
+  its UI. `NotificationService` buffers a Gmail notification only when title+text+bigText
+  matches `added … amazon pay wallet` with a rupee amount (`GmailFilter.kt`, mirrored by
+  `src/gmailFilter.ts` — change both together); everything else is dropped before
+  `EventBuffer` (privacy), bundled summaries (`FLAG_GROUP_SUMMARY`) are skipped, and an empty
+  allowlist ("capture off") silences Gmail too. `sync.ts` re-checks the predicate. Such rows
+  get `channel = 'email'`, which takes part in cross-channel soft dedup against the Amazon app's
+  own notification. Parser: top-up → income, source `Amazon Pay`, kind `wallet_topup`;
+  `classify()` makes it `Family` income, or `self` when the Settings toggle
+  `amazon_topup_family` (default ON) is off.
 - Notification allowlist has three states, not two: key **absent** → `DEFAULT_ALLOWLIST`; key
   present but an **empty array** (`"[]"`) → capture is intentionally OFF (no fallback to
   defaults) — this is how unchecking every app in Settings actually disables capture; key
@@ -100,20 +110,43 @@ Input: `(sender: string, body: string, ts?: number)`. Output: `ParsedTransaction
   sender) up to the next punctuation/newline; skips "your ..." clauses and purely-numeric
   leftovers from a truncated time expression (`10:30 at SWIGGY` → `SWIGGY`, not `10`).
 - Source: the sender id / package. Timestamp: event `ts` (capture time).
-- Category: keyword map in `src/categories.ts` (Food, Groceries, Transport, Uber, Shopping,
-  Bills, Entertainment, Health, UPI, Cash, Income, Other — Uber checked before Transport so
-  rides get their own category). Income transactions default straight to `Income` instead of
-  matching spend keywords in the body, unless a learned merchant rule overrides it.
+- Negative guard also covers IPO bid/block/mandate traffic (`UPI-IPO`, `IPO`, "mandate ...
+  successfully created"): the bank debit for an IPO is not a spend and the mandate notice is
+  not a transaction.
+- Parsed `kind` (optional): `card_bill` (credit-card bill payment), `wallet_load` (top-up of a
+  wallet), `own_transfer` (message says it is to the user's own account), `investment` (IPO
+  allotment etc.). Consumed only by `classify()`.
+- Categories (`src/categories.ts`): Food, Groceries, Transport, Uber, Shopping, Bills,
+  Entertainment, Health, Investment, Education, UPI, Cash, Income, **Family**, Friend Transfer,
+  Loan/Dues, Other. Keyword order matters: Uber before Transport; Investment/Education before
+  Bills/UPI. Income defaults to `Income` instead of matching spend keywords, unless a learned
+  merchant rule overrides it. Grouping for display is `groupOf()` — no DB column.
+- **`classify()` (`src/classify.ts`) is the single classifier**, used by live sync, maintenance
+  and the re-check tool so a message gets the same result whenever it is processed. Precedence (self > family > friend > investment > categorize):
+  1. `kind` card_bill / wallet_load / own_transfer, or `isSelfTransfer()` (counterparty matches
+     the user's phone, UPI handle or account last-4 from Settings) → `type 'self'`, hidden from
+     spend and income totals. Self is checked first because the user's own full name contains
+     the family member names.
+  2. An **income** whose merchant/counterparty matches a `family_members` entry → category
+     `Family` (letters/digits-only compare; bank-truncated names match only with ≥8 chars).
+  3. Any row (income or expense) whose merchant/counterparty matches a `friends` entry (Settings
+     → Friends; names or VPAs, same matcher as family, stored under the `friends` settings key)
+     → `Friend Transfer`; `type` stays as parsed. Friend Transfer is in `NON_SPEND`, so friend
+     payments leave Spent / Out of pocket.
+  4. `kind` investment → `Investment`.
+  5. Otherwise `categorize()`: learned merchant rule > keyword map.
+- A card-bill or wallet-load leg is deliberately `self`: the purchases it pays for were never
+  individually captured, so this is the only record — see the re-check safety rules below.
 
 ---
 
 ## 4. DB rules (`src/db.ts`, op-sqlite)
 - Library: `@op-engineering/op-sqlite` (replaces deprecated `react-native-quick-sqlite`; New-Arch ready).
 - One connection, opened once; enable **WAL** (`PRAGMA journal_mode=WAL`).
-- Migrations are linear and gated by `PRAGMA user_version` (currently v3) — every step is
+- Migrations are linear and gated by `PRAGMA user_version` (currently v4) — every step is
   `ALTER TABLE ... ADD COLUMN` or `CREATE TABLE IF NOT EXISTS`, never a rebuild/DROP/UPDATE of
   existing rows. This is a hard rule, not just current practice: existing installs carry real
-  transaction history and balances that must survive every update untouched.
+  transaction history that must survive every update untouched.
   ```sql
   CREATE TABLE IF NOT EXISTS transactions (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -129,18 +162,61 @@ Input: `(sender: string, body: string, ts?: number)`. Output: `ParsedTransaction
     note             TEXT,                                 -- v2
     category_source  TEXT DEFAULT 'auto',                   -- v2 ('auto' | 'manual')
     channel          TEXT,                                  -- v3 ('sms' | 'notification' | 'manual' | NULL)
+    settles_id       INTEGER,                               -- v4 (this row settles row N)
+    owed_amount      REAL,                                  -- v4 (split ride: amount friends owe)
     dedup_key        TEXT UNIQUE
   );
   CREATE INDEX IF NOT EXISTS idx_tx_timestamp ON transactions(timestamp);
   CREATE INDEX IF NOT EXISTS idx_tx_category ON transactions(category);
   CREATE INDEX IF NOT EXISTS idx_tx_type ON transactions(type);
-  -- v2 auxiliary tables: app_settings (key/value; also stores per-account balances under
-  -- '__balance__' + key), merchant_rules (learned categorization), budgets.
+  CREATE INDEX IF NOT EXISTS idx_tx_settles ON transactions(settles_id);  -- v4
+  -- v2 auxiliary tables: app_settings (key/value; legacy '__balance__*' rows are inert),
+  -- merchant_rules (learned categorization), budgets.
   ```
+- **Settlement and netting (v4).** `settles_id` on a child row points at the parent it settles
+  (a friend's repayment of an Uber ride, an income cancelling an expense). A child is excluded
+  from spend/income totals; the parent's *effective amount* is `MAX(amount − Σ opposite-direction
+  children, 0)` (`NETTING_JOIN` / `EFFECTIVE_AMOUNT` in db.ts, mirrored in pure `src/netting.ts`
+  for tests — op-sqlite cannot run in jest, so **change both together**). A same-direction link
+  (legacy Uber data) excludes the child but does not reduce the parent, except that
+  `getUberSummary` counts it as reimbursed so the Uber card keeps matching old data.
+  `owed_amount` is only a note of what friends are expected to repay (drives "waiting for
+  repayment"); it never changes totals. `getSummary` also returns `fromFamily` (Family-category
+  income) and `earned` (= received − fromFamily). Uber screen invariant: Paid − Got back = Your
+  share, equal to the Uber row on the Dashboard.
 - **Strict idempotency:** `dedup_key = hash(source + amount + floor(ts/60000) + raw_text)`; insert with `INSERT OR IGNORE`. Prevents live-emit + buffer-drain double counts of the exact same message. Unaffected by the soft-dedup rule below — always applies.
 - **Soft cross-channel dedup** (user-chosen policy — see §8 for why "cross-channel only"): the same payment can arrive via SMS *and* a bank-app notification with different raw text (different strict key). An incoming row is dropped only when an *existing* row has a **known, different** channel (same-channel repeats are always kept), amount matches, timestamps are within 2 minutes, and counterparties agree or are unknown. Every pre-v3 row has `channel = NULL` and is exempt — NULL never triggers a drop. Manual entries (`channel = 'manual'`) never soft-dedup. Restore (`export.ts`) bypasses soft dedup entirely (`skipSoftDedup: true`) so it can't merge two genuine close-together payments; the strict key still keeps a restore idempotent.
 - API: `initDb()`, `insertTransaction(tx, options?)`, `insertManual(tx)`, `getAll()`, `queryTransactions(filters)`, `getSummary(range)` (spent/received/net + per-local-day and per-category breakdowns). No dead `getByDateRange`/`getMonthlySummary`/`getTrend` — removed, use `queryTransactions`/`getSummary`.
 - `getSummary`'s per-day bucket uses **local-calendar-day** arithmetic (`dates.ts` `localTzOffsetMs()`), not raw UTC-day division — otherwise a transaction between local midnight and the UTC offset (00:00–05:30 on an IST device) lands in yesterday's chart bucket while the transaction list correctly shows it under "Today". Convert a `day` index back to a `Date` with `localDayIndexToDate()`, never `new Date(day * 86400000)`.
+
+---
+
+## 4b. Own-account transfer pairing and the re-check tool
+Moving money between the user's own accounts yields a debit row and a credit row; both must end
+up `type 'self'`. After each sync batch `transferPair.ts` looks for pairs (pure; DB glue in
+`transferSync.ts`):
+- **High confidence → auto-applied, undoable:** the two raw texts share a UPI/IMPS/UTR/RRN
+  reference, or equal amount (±₹0.5), ≤3 min apart, different accounts, and neither leg is a
+  third-party transaction (card/merchant purchase, refund/reversal, a person who is not the
+  user).
+- **Medium → suggestion only** (Dashboard banner, never applied silently): equal amount, ≤15 min
+  apart, different accounts, not high, not an obvious purchase/refund.
+- Rows the user edited by hand are never touched automatically; windows are minutes, not days,
+  so an unrelated equal credit later never pairs.
+- Every auto-applied pair is written to `app_settings.auto_self_log` (`transferLog.ts`, last 50
+  batches) with each row's previous type, so Undo restores it exactly. Don't store this in the
+  user-visible `note` column.
+
+**Re-check old transactions** (`recheck.ts`, Settings → Categorization) re-parses every stored
+`raw_text` with the current parser/identity/rules/family and previews changes grouped by kind;
+nothing is applied until confirmed, and the applied set is logged (`recheck_log`) for undo.
+Safety rules, each covered by a test:
+- skip rows the user touched (`category_source` or `channel` = 'manual');
+- skip rows in any `settles_id` link, parent or child;
+- never flip a historical card_bill / wallet_load row to `self` (its spend was never captured);
+- a row the parser now rejects (phantom) is **never deleted**: it becomes `self` with an
+  appended note (`[auto] not a transaction (re-check)`);
+- changed rows keep `category_source 'auto'`; `raw_text` and `dedup_key` are untouched.
 
 ---
 

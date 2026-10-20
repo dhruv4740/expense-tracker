@@ -3,7 +3,7 @@
 // Profile, budgets, notification allowlist, permissions, data export/import,
 // and about section. ScrollView with SectionHeader-divided Card groups.
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   Alert,
   Modal,
@@ -25,10 +25,26 @@ import {
   getBudgets,
   setBudget,
   OVERALL_BUDGET_KEY,
+  getAccountCounts,
+  getIncomeSources,
+  getPeopleSources,
 } from '../db';
 import type { Budget } from '../db';
 import { CATEGORIES } from '../categories';
-import { getIdentity, setIdentity, getDismissedApps, setDismissedApps } from '../settings';
+import {
+  getIdentity,
+  setIdentity,
+  getDismissedApps,
+  setDismissedApps,
+  getFamilyMembers,
+  setFamilyMembers,
+  getFriends,
+  setFriends,
+  getAmazonTopupFamily,
+  setAmazonTopupFamily,
+} from '../settings';
+import { suggestOwnAccounts, suggestFamily } from '../suggestions';
+import type { AccountCount, FamilySuggestion } from '../suggestions';
 import type { Identity } from '../identity';
 import { refreshSyncCaches } from '../sync';
 import { DATA_CHANGED } from '../sync';
@@ -44,6 +60,9 @@ import type { InstalledApp } from '../native/NotificationModule';
 import { exportCsv, exportJson, restoreFromJson } from '../export';
 import { Card, SectionHeader, Icon } from '../components';
 import { theme } from '../theme';
+import { RecheckModal } from './RecheckModal';
+import { applyRecheck, getRecheckLog, previewRecheck, undoRecheck } from '../recheckSync';
+import type { RecheckChange } from '../recheck';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -62,12 +81,14 @@ const InputRow = React.memo(function InputRow({
   onChangeText,
   keyboardType = 'default',
   placeholder,
+  hint,
 }: {
   label: string;
   value: string;
   onChangeText: (v: string) => void;
   keyboardType?: 'default' | 'numeric' | 'email-address';
   placeholder?: string;
+  hint?: string;
 }) {
   return (
     <View style={inputStyles.row}>
@@ -80,9 +101,21 @@ const InputRow = React.memo(function InputRow({
         placeholder={placeholder ?? ''}
         placeholderTextColor={theme.colors.textMuted}
       />
+      {hint ? <Text style={inputStyles.hint}>{hint}</Text> : null}
     </View>
   );
 });
+
+/** ₹61k / ₹1.2L style short amount for chips. */
+function shortRupees(n: number): string {
+  if (n >= 100000) {
+    return `₹${(n / 100000).toFixed(1).replace(/\.0$/, '')}L`;
+  }
+  if (n >= 1000) {
+    return `₹${Math.round(n / 1000)}k`;
+  }
+  return `₹${Math.round(n)}`;
+}
 
 const inputStyles = StyleSheet.create({
   row: {
@@ -92,6 +125,11 @@ const inputStyles = StyleSheet.create({
     fontSize: theme.font.size.sm,
     color: theme.colors.textMuted,
     marginBottom: theme.spacing.xs,
+  },
+  hint: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textMuted,
+    marginTop: theme.spacing.xs,
   },
   input: {
     backgroundColor: theme.colors.surfaceAlt,
@@ -116,11 +154,23 @@ export default function SettingsScreen() {
   const [upiHandles, setUpiHandles] = useState('');
   const [accountLast4, setAccountLast4] = useState('');
 
+  // ── Suggestions ─────────────────────────────────────────────────────────────
+  const [accountSuggestions, setAccountSuggestions] = useState<AccountCount[]>([]);
+  const [family, setFamily] = useState<string[]>([]);
+  const [familyInput, setFamilyInput] = useState('');
+  const [familySuggestions, setFamilySuggestions] = useState<FamilySuggestion[]>([]);
+  const [friends, setFriendsState] = useState<string[]>([]);
+  const [friendInput, setFriendInput] = useState('');
+  const [amazonTopup, setAmazonTopup] = useState(true);
+  const [friendSuggestions, setFriendSuggestions] = useState<FamilySuggestion[]>([]);
+
   // ── Budgets ─────────────────────────────────────────────────────────────────
   const [overallBudget, setOverallBudget] = useState('');
   const [categoryBudgets, setCategoryBudgets] = useState<Record<string, string>>({});
 
   // ── Notification allowlist ───────────────────────────────────────────────────
+  const [showApps, setShowApps] = useState(false);
+  const [showPerms, setShowPerms] = useState(false);
   const [allowlist, setAllowlistState] = useState<AllowlistEntry[]>([]);
   const [showAppPicker, setShowAppPicker] = useState(false);
   const [allInstalledApps, setAllInstalledApps] = useState<InstalledApp[]>([]);
@@ -132,6 +182,29 @@ export default function SettingsScreen() {
   // ── Data buttons ────────────────────────────────────────────────────────────
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [recheck, setRecheck] = useState<RecheckChange[] | null>(null);
+  const [hasRecheckLog, setHasRecheckLog] = useState(() => getRecheckLog() != null);
+  const finishRecheck = (msg: string) => {
+    setHasRecheckLog(getRecheckLog() != null);
+    DeviceEventEmitter.emit(DATA_CHANGED);
+    Alert.alert('Re-check', msg, undefined, { cancelable: true });
+  };
+
+  const loadSuggestions = useCallback(() => {
+    const identity = getIdentity();
+    const fam = getFamilyMembers();
+    setFamily(fam);
+    setAccountSuggestions(suggestOwnAccounts(getAccountCounts(), identity));
+    const fr = getFriends();
+    setFriendsState(fr);
+    setAmazonTopup(getAmazonTopupFamily());
+    setFamilySuggestions(
+      suggestFamily(getIncomeSources(), { identity, family: fam, friends: fr }),
+    );
+    setFriendSuggestions(
+      suggestFamily(getPeopleSources(), { identity, family: fam, friends: fr }),
+    );
+  }, []);
 
   const load = useCallback(async () => {
     // Profile
@@ -140,6 +213,7 @@ export default function SettingsScreen() {
     setPhones((identity.phones ?? []).join(', '));
     setUpiHandles((identity.upiHandles ?? []).join(', '));
     setAccountLast4((identity.accountLast4 ?? []).join(', '));
+    loadSuggestions();
 
     // Budgets
     const budgets: Budget[] = getBudgets();
@@ -188,7 +262,7 @@ export default function SettingsScreen() {
     } catch {
       setNotifGranted(false);
     }
-  }, []);
+  }, [loadSuggestions]);
 
   useFocusEffect(
     useCallback(() => {
@@ -213,6 +287,47 @@ export default function SettingsScreen() {
     setIdentity(identity);
     refreshSyncCaches();
     Alert.alert('Saved', 'Profile updated.');
+  }
+
+  function handleAddAccount(last4: string) {
+    const identity = getIdentity();
+    if (!identity.accountLast4.includes(last4)) {
+      identity.accountLast4 = [...identity.accountLast4, last4];
+      setIdentity(identity);
+      refreshSyncCaches();
+    }
+    setAccountLast4(identity.accountLast4.join(', '));
+    loadSuggestions();
+  }
+
+  function saveFamily(next: string[]) {
+    setFamilyMembers(next);
+    refreshSyncCaches();
+    loadSuggestions();
+  }
+
+  function handleAddFamily(value: string) {
+    const v = value.trim();
+    if (!v || [...family, ...friends].some(f => f.toLowerCase() === v.toLowerCase())) {
+      return;
+    }
+    saveFamily([...family, v]);
+    setFamilyInput('');
+  }
+
+  function saveFriends(next: string[]) {
+    setFriends(next);
+    refreshSyncCaches();
+    loadSuggestions();
+  }
+
+  function handleAddFriend(value: string) {
+    const v = value.trim();
+    if (!v || [...family, ...friends].some(f => f.toLowerCase() === v.toLowerCase())) {
+      return;
+    }
+    saveFriends([...friends, v]);
+    setFriendInput('');
   }
 
   // ── Budget save ──────────────────────────────────────────────────────────────
@@ -341,7 +456,13 @@ export default function SettingsScreen() {
       {/* ── Profile ── */}
       <SectionHeader title="Profile" />
       <Card>
-        <InputRow label="Name" value={name} onChangeText={setName} placeholder="Your name" />
+        <InputRow
+          label="Name"
+          value={name}
+          onChangeText={setName}
+          placeholder="Your name"
+          hint="Used to spot transfers to your own accounts"
+        />
         <InputRow
           label="Phone numbers (comma-separated)"
           value={phones}
@@ -362,9 +483,145 @@ export default function SettingsScreen() {
           keyboardType="numeric"
           placeholder="1234, 5678"
         />
+        {accountSuggestions.length > 0 && (
+          <View style={styles.chipRow}>
+            {accountSuggestions.slice(0, 6).map(a => (
+              <TouchableOpacity
+                key={a.account}
+                style={styles.chip}
+                onPress={() => handleAddAccount(a.account)}
+              >
+                <Text style={styles.chipText}>
+                  Add ••{a.account} ({a.count} msgs)
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
         <TouchableOpacity style={styles.saveBtn} onPress={handleSaveProfile}>
           <Text style={styles.saveBtnText}>Save Profile</Text>
         </TouchableOpacity>
+      </Card>
+
+      {/* ── Family ── */}
+      <SectionHeader title="Family" />
+      <Card>
+        <Text style={styles.subLabel}>
+          Credits from these people are tracked as Family income, not Friend Transfer.
+        </Text>
+        <View style={styles.chipRow}>
+          {family.map(f => (
+            <TouchableOpacity
+              key={f}
+              style={styles.chip}
+              onPress={() => saveFamily(family.filter(x => x !== f))}
+            >
+              <Text style={styles.chipText}>{f}  ✕</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        <InputRow
+          label="Add a name or UPI handle"
+          value={familyInput}
+          onChangeText={setFamilyInput}
+          placeholder="Full name or name@upi"
+        />
+        <TouchableOpacity
+          style={styles.saveBtn}
+          onPress={() => handleAddFamily(familyInput)}
+        >
+          <Text style={styles.saveBtnText}>Add</Text>
+        </TouchableOpacity>
+        {familySuggestions.length > 0 && (
+          <>
+            <Text style={[styles.subLabel, styles.suggestLabel]}>Suggestions</Text>
+            <View style={styles.chipRow}>
+              {familySuggestions.map(sug => (
+                <TouchableOpacity
+                  key={sug.value}
+                  style={styles.chip}
+                  onPress={() => handleAddFamily(sug.value)}
+                >
+                  <Text style={styles.chipText}>
+                    + {sug.value} · {shortRupees(sug.total)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        )}
+      </Card>
+
+      <Card>
+        <View style={styles.allowRow}>
+          <View style={styles.allowLabelBlock}>
+            <Text style={styles.allowLabel}>Amazon Pay wallet top-ups come from family</Text>
+            <Text style={styles.subLabel}>
+              Needs the Gmail "added to your Amazon Pay Wallet" notification. Off: counted as
+              your own money (hidden).
+            </Text>
+          </View>
+          <Switch
+            value={amazonTopup}
+            onValueChange={v => {
+              setAmazonTopup(v);
+              setAmazonTopupFamily(v);
+              refreshSyncCaches();
+            }}
+            trackColor={{ true: theme.colors.accent, false: theme.colors.surfaceAlt }}
+            thumbColor={theme.colors.textPrimary}
+          />
+        </View>
+      </Card>
+
+      {/* ── Friends ── */}
+      <SectionHeader title="Friends" />
+      <Card>
+        <Text style={styles.subLabel}>
+          Payments to or from these people are categorised as Friend Transfer (family wins if
+          a name is in both).
+        </Text>
+        <View style={styles.chipRow}>
+          {friends.map(f => (
+            <TouchableOpacity
+              key={f}
+              style={styles.chip}
+              onPress={() => saveFriends(friends.filter(x => x !== f))}
+            >
+              <Text style={styles.chipText}>{f}  ✕</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        <InputRow
+          label="Add a name or UPI handle"
+          value={friendInput}
+          onChangeText={setFriendInput}
+          placeholder="Full name or name@upi"
+        />
+        <TouchableOpacity
+          style={styles.saveBtn}
+          onPress={() => handleAddFriend(friendInput)}
+        >
+          <Text style={styles.saveBtnText}>Add</Text>
+        </TouchableOpacity>
+        {friendSuggestions.length > 0 && (
+          <>
+            <Text style={[styles.subLabel, styles.suggestLabel]}>Suggestions</Text>
+            <View style={styles.chipRow}>
+              {friendSuggestions.map(sug => (
+                <TouchableOpacity
+                  key={sug.value}
+                  style={styles.chip}
+                  onPress={() => handleAddFriend(sug.value)}
+                >
+                  <Text style={styles.chipText}>
+                    + {sug.value} · {shortRupees(sug.total)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        )}
       </Card>
 
       {/* ── Budgets ── */}
@@ -396,7 +653,13 @@ export default function SettingsScreen() {
       </Card>
 
       {/* ── Banks & Apps Captured ── */}
-      <SectionHeader title="Apps to Capture Notifications From" />
+      <TouchableOpacity style={styles.collapseRow} onPress={() => setShowApps(v => !v)} activeOpacity={0.7}>
+        <Text style={styles.collapseTitle}>Apps to Capture Notifications From</Text>
+        <Text style={styles.collapseMeta}>
+          {allowlist.filter(e => e.enabled).length} on {showApps ? '▾' : '▸'}
+        </Text>
+      </TouchableOpacity>
+      {showApps && (
       <Card>
         {allowlistError && (
           <Text style={styles.allowError}>⚠️ {allowlistError}</Text>
@@ -436,6 +699,7 @@ export default function SettingsScreen() {
           <Text style={styles.addAppBtnText}>+ Add App</Text>
         </TouchableOpacity>
       </Card>
+      )}
 
       {/* ── Add App Picker Modal ── */}
       <Modal
@@ -491,7 +755,13 @@ export default function SettingsScreen() {
       </Modal>
 
       {/* ── Permissions ── */}
-      <SectionHeader title="Permissions" />
+      <TouchableOpacity style={styles.collapseRow} onPress={() => setShowPerms(v => !v)} activeOpacity={0.7}>
+        <Text style={styles.collapseTitle}>Permissions</Text>
+        <Text style={styles.collapseMeta}>
+          {notifGranted === null ? '…' : notifGranted ? 'Granted' : 'Not granted'} {showPerms ? '▾' : '▸'}
+        </Text>
+      </TouchableOpacity>
+      {showPerms && (
       <Card>
         <View style={styles.permRow}>
           <View style={styles.permLeft}>
@@ -525,6 +795,7 @@ export default function SettingsScreen() {
           )}
         </View>
       </Card>
+      )}
 
       {/* ── Categorization ── */}
       <SectionHeader title="Categorization" />
@@ -539,7 +810,33 @@ export default function SettingsScreen() {
           </Text>
           <Icon name="chevron-forward" size={16} color={theme.colors.textMuted} />
         </TouchableOpacity>
+        <TouchableOpacity style={styles.dataBtn} onPress={() => setRecheck(previewRecheck())}>
+          <Icon name="refresh" size={18} color={theme.colors.accent} />
+          <Text style={[styles.dataBtnText, styles.dataBtnTextGrow]}>
+            Re-check old transactions
+          </Text>
+        </TouchableOpacity>
+        {hasRecheckLog && (
+          <TouchableOpacity
+            style={styles.dataBtn}
+            onPress={() => {
+              const r = undoRecheck();
+              finishRecheck(`Restored ${r.restored} rows${r.skipped ? `; ${r.skipped} left as you edited them` : ''}.`);
+            }}
+          >
+            <Icon name="refresh" size={18} color={theme.colors.accent} />
+            <Text style={styles.dataBtnText}>Undo last re-check</Text>
+          </TouchableOpacity>
+        )}
       </Card>
+      <RecheckModal
+        changes={recheck}
+        onCancel={() => setRecheck(null)}
+        onApply={sel => {
+          setRecheck(null);
+          finishRecheck(`Updated ${applyRecheck(sel)} rows. You can undo this from Settings.`);
+        }}
+      />
 
       {/* ── Data ── */}
       <SectionHeader title="Data" />
@@ -601,6 +898,20 @@ export default function SettingsScreen() {
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
+  collapseRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: theme.spacing.lg,
+    paddingVertical: theme.spacing.md,
+    marginTop: theme.spacing.md,
+  },
+  collapseTitle: {
+    fontSize: theme.font.size.sm,
+    fontWeight: theme.font.weight.semibold,
+    color: theme.colors.textSecondary,
+  },
+  collapseMeta: { fontSize: theme.font.size.sm, color: theme.colors.accent },
   container: {
     flex: 1,
     backgroundColor: theme.colors.bg,
@@ -619,6 +930,27 @@ const styles = StyleSheet.create({
     color: '#000',
     fontWeight: theme.font.weight.bold,
     fontSize: theme.font.size.md,
+  },
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
+    marginBottom: theme.spacing.sm,
+  },
+  chip: {
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.xs + 2,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.surfaceAlt,
+    borderWidth: 1,
+    borderColor: theme.colors.accent + '55',
+  },
+  chipText: {
+    color: theme.colors.accent,
+    fontSize: theme.font.size.sm,
+  },
+  suggestLabel: {
+    marginTop: theme.spacing.md,
   },
   subLabel: {
     fontSize: theme.font.size.xs,

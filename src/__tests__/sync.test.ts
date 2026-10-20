@@ -20,11 +20,22 @@ jest.mock('../native/NotificationModule', () => ({
 jest.mock('../db', () => ({
   insertTransaction: jest.fn(() => true),
   getAllMerchantRules: jest.fn(() => ({})),
-  setAccountBalance: jest.fn(),
+}));
+
+jest.mock('../transferSync', () => ({
+  snapshotMaxId: jest.fn(() => 0),
+  runTransferPairing: jest.fn(() => 0),
+}));
+
+jest.mock('../cancelSync', () => ({
+  runCancelOut: jest.fn(() => 0),
 }));
 
 jest.mock('../settings', () => ({
   getIdentity: jest.fn(() => ({ name: '', phones: [], upiHandles: [], accountLast4: [] })),
+  getFamilyMembers: jest.fn(() => []),
+  getFriends: jest.fn(() => []),
+  getAmazonTopupFamily: jest.fn(() => true),
 }));
 
 import { syncBuffer } from '../sync';

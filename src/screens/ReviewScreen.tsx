@@ -30,9 +30,10 @@ import type { Category } from '../categories';
 import { CATEGORY_META } from '../categories';
 import { isGenericMerchantKey, normalizeMerchantKey } from '../categories';
 import { DATA_CHANGED } from '../sync';
-import { AmountText, Card, EmptyState, SectionHeader } from '../components';
+import { AmountText, EmptyState, SectionHeader } from '../components';
 import { theme } from '../theme';
-import { formatDate } from '../dates';
+import { displayMerchant } from '../merchantDisplay';
+import { formatDate, monthRange } from '../dates';
 
 export default function ReviewScreen() {
   const [items, setItems] = useState<TransactionRow[]>([]);
@@ -40,8 +41,10 @@ export default function ReviewScreen() {
 
   const load = useCallback(() => {
     // Match getUncategorizedCount's predicate exactly (expenses only) so the
-    // Dashboard banner count and this list never disagree.
+    // Dashboard banner count and this list never disagree. Current month only:
+    // older months aren't worth nagging about.
     const rows = queryTransactions({
+      ...monthRange(),
       categories: ['Other'],
       types: ['expense'],
       includeSelf: false,
@@ -120,7 +123,7 @@ export default function ReviewScreen() {
           <TouchableOpacity style={styles.row} onPress={() => setSelected(item)} activeOpacity={0.7}>
             <View style={styles.rowMain}>
               <Text style={styles.merchant} numberOfLines={1}>
-                {item.merchant ?? item.counterparty ?? item.source ?? 'Unknown'}
+                {displayMerchant(item.merchant) ?? item.counterparty ?? item.source ?? 'Unknown'}
               </Text>
               <Text style={styles.date}>{formatDate(item.timestamp)}</Text>
             </View>
@@ -144,7 +147,7 @@ export default function ReviewScreen() {
             <Text style={styles.sheetTitle}>Choose a category</Text>
             {selected && (
               <Text style={styles.sheetSub} numberOfLines={1}>
-                {selected.merchant ?? selected.counterparty ?? 'Transaction'} · ₹
+                {displayMerchant(selected.merchant) ?? selected.counterparty ?? 'Transaction'} · ₹
                 {selected.amount.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
               </Text>
             )}

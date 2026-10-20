@@ -17,12 +17,13 @@ import { DeviceEventEmitter } from 'react-native';
 import { peekBuffer, ackBuffer, onSmsReceived, type RawEvent } from './native/SmsModule';
 import { onNotificationReceived } from './native/NotificationModule';
 import { parseTransaction } from './parser';
-import { insertTransaction, getAllMerchantRules, setAccountBalance } from './db';
-import { categorize } from './categories';
-import type { Category } from './categories';
-import { isSelfTransfer } from './identity';
+import { insertTransaction, getAllMerchantRules } from './db';
+import { runTransferPairing, snapshotMaxId } from './transferSync';
+import { runCancelOut } from './cancelSync';
+import { classify } from './classify';
 import type { Identity } from './identity';
-import { getIdentity } from './settings';
+import { getIdentity, getFamilyMembers, getFriends, getAmazonTopupFamily } from './settings';
+import { GMAIL_PKG, isAmazonWalletTopUp } from './gmailFilter';
 
 export const DATA_CHANGED = 'ExpenseDataChanged';
 
@@ -39,6 +40,9 @@ let identityCache: Identity = {
 };
 
 let learnedRulesCache: Record<string, string> = {};
+let familyCache: string[] = [];
+let friendsCache: string[] = [];
+let amazonTopupFamilyCache = true;
 
 /**
  * Reload identity and learned merchant rules from the DB into module-level
@@ -50,6 +54,9 @@ let learnedRulesCache: Record<string, string> = {};
 export function refreshSyncCaches(): void {
   identityCache = getIdentity();
   learnedRulesCache = getAllMerchantRules();
+  familyCache = getFamilyMembers();
+  friendsCache = getFriends();
+  amazonTopupFamilyCache = getAmazonTopupFamily();
 }
 
 // ─── Core processing ──────────────────────────────────────────────────────────
@@ -66,6 +73,12 @@ function processOne(e: RawEvent): boolean {
   if (!e.body) {
     return false;
   }
+  // Gmail is captured only for Amazon Pay wallet top-ups; the native side already
+  // filters, this drops anything else that somehow reached the buffer.
+  const fromGmail = e.pkg === GMAIL_PKG;
+  if (fromGmail && !isAmazonWalletTopUp(e.body)) {
+    return false;
+  }
 
   // 1. Parse — null means the message is not a transaction.
   const parsed = parseTransaction(sender, e.body, e.ts);
@@ -73,36 +86,19 @@ function processOne(e: RawEvent): boolean {
     return false;
   }
 
-  // 2. Categorise using learned rules first, then keyword map.
-  const category: Category = categorize(
-    parsed.merchant,
-    parsed.raw_text,
-    parsed.counterparty,
-    learnedRulesCache,
-    parsed.isExpense,
-  );
+  // 2. Category + type from the shared classifier (identity, family, kind, rules).
+  const { category, type } = classify(parsed, {
+    identity: identityCache,
+    rules: learnedRulesCache,
+    family: familyCache,
+    friends: friendsCache,
+    amazonTopupFamily: amazonTopupFamilyCache,
+  });
 
-  // 3. Determine transaction type.
-  //    Self-transfer: counterparty matches one of the user's own identifiers.
-  //    Otherwise: expense vs income follows the parser's isExpense flag.
-  let type: 'expense' | 'income' | 'self';
-  if (isSelfTransfer(parsed, identityCache)) {
-    type = 'self';
-  } else {
-    type = parsed.isExpense ? 'expense' : 'income';
-  }
-
-  // 4. Merchant fallback chain: parser merchant → counterparty → sender.
+  // 3. Merchant fallback chain: parser merchant → counterparty → sender.
   const merchant = parsed.merchant ?? parsed.counterparty ?? sender ?? null;
 
-  // 5. Store available balance if the message included one (best-effort, no wake lock,
-  //    runs only while the app is foregrounded or while draining the buffer on open).
-  if (parsed.balance != null && !isNaN(parsed.balance)) {
-    const accountKey = parsed.account ?? parsed.source ?? 'unknown';
-    setAccountBalance(accountKey, parsed.balance, parsed.timestamp);
-  }
-
-  // 6. Insert (idempotent via dedup_key + cross-channel dedup in db.ts).
+  // 4. Insert (idempotent via dedup_key + cross-channel dedup in db.ts).
   return insertTransaction({
     amount: parsed.amount,
     merchant,
@@ -114,8 +110,44 @@ function processOne(e: RawEvent): boolean {
     counterparty: parsed.counterparty ?? null,
     account: parsed.account ?? null,
     category_source: 'auto',
-    channel: e.kind,
+    channel: fromGmail ? 'email' : e.kind,
   });
+}
+
+/** Max row id before a batch, or -1 (skip pairing) if it cannot be read. */
+function safeSnapshot(): number {
+  try {
+    return snapshotMaxId();
+  } catch {
+    return -1;
+  }
+}
+
+/**
+ * Look for own-account transfer pairs among rows inserted after `maxIdBefore`
+ * and auto-mark the high-confidence ones. Never allowed to break a sync.
+ */
+function pairNewRows(maxIdBefore: number): void {
+  if (maxIdBefore < 0) {
+    return;
+  }
+  try {
+    // Own-account transfers first, so the cancel-out pass skips rows now 'self'.
+    runTransferPairing(maxIdBefore, identityCache);
+    runCancelOut(maxIdBefore, identityCache, friendsCache);
+  } catch {
+    // Pairing is a convenience; the rows are already safely stored.
+  }
+}
+
+/** processOne + pairing for a single live event. */
+function processLive(e: RawEvent): boolean {
+  const before = safeSnapshot();
+  const ok = processOne(e);
+  if (ok) {
+    pairNewRows(before);
+  }
+  return ok;
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -139,7 +171,9 @@ export async function syncBuffer(): Promise<number> {
 
   let inserted = 0;
   let processed = 0;
+  let maxIdBefore = 0;
   try {
+    maxIdBefore = safeSnapshot();
     const events = await peekBuffer();
     for (const e of events) {
       try {
@@ -158,6 +192,7 @@ export async function syncBuffer(): Promise<number> {
     // Native module not ready (e.g. dev fast-refresh) — buffer persists for next drain.
   }
   if (inserted > 0) {
+    pairNewRows(maxIdBefore);
     DeviceEventEmitter.emit(DATA_CHANGED);
   }
   return inserted;
@@ -172,12 +207,12 @@ export async function syncBuffer(): Promise<number> {
 export function subscribeLiveEvents(): () => void {
   const subs = [
     onSmsReceived(e => {
-      if (processOne(e)) {
+      if (processLive(e)) {
         DeviceEventEmitter.emit(DATA_CHANGED);
       }
     }),
     onNotificationReceived(e => {
-      if (processOne(e as RawEvent)) {
+      if (processLive(e as RawEvent)) {
         DeviceEventEmitter.emit(DATA_CHANGED);
       }
     }),

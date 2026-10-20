@@ -3,11 +3,12 @@
 // ADD (tx param absent) or EDIT (tx param present) a transaction.
 // After save/delete: emits DATA_CHANGED and navigation.goBack().
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   DeviceEventEmitter,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -27,18 +28,21 @@ import {
   deleteTransaction,
   queryTransactions,
   upsertMerchantRule,
-  getAllAccountBalances,
-  getAccountBalance,
-  setAccountBalance,
   setSettlement,
+  getSettlementLinks,
+  getPairCandidates,
+  getKnownSettlementCounterparties,
 } from '../db';
 import type { TransactionRow, TransactionType } from '../db';
 import { GROUPED_CATEGORIES } from '../categories';
 import type { Category } from '../categories';
 import { isGenericMerchantKey, normalizeMerchantKey } from '../categories';
 import { DATA_CHANGED, refreshSyncCaches } from '../sync';
-import { CategoryChip, Icon, SectionHeader } from '../components';
+import { suggestPairs } from '../settle';
+import { promptMarkTransfer } from './markTransfer';
+import { CategoryChip, Icon } from '../components';
 import { theme } from '../theme';
+import { displayMerchant } from '../merchantDisplay';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -47,8 +51,8 @@ type Props = NativeStackScreenProps<RootStackParamList, 'EditTransaction'>;
 type SegType = { label: string; value: TransactionType };
 
 const TYPE_SEGMENTS: SegType[] = [
-  { label: 'Debit', value: 'expense' },
-  { label: 'Credit', value: 'income' },
+  { label: 'Expense', value: 'expense' },
+  { label: 'Income', value: 'income' },
   { label: 'Self', value: 'self' },
 ];
 
@@ -72,6 +76,14 @@ function formatTime(ts: number): string {
   });
 }
 
+function rupees(n: number): string {
+  return `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+}
+
+function whoIs(r: { counterparty?: string | null; merchant?: string | null; source?: string | null }): string {
+  return r.counterparty ?? displayMerchant(r.merchant) ?? r.source ?? 'someone';
+}
+
 // ─── Screen ──────────────────────────────────────────────────────────────────
 
 export default function EditTransactionScreen({ route, navigation }: Props) {
@@ -86,21 +98,73 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
   const [timestamp, setTimestamp] = useState(tx?.timestamp ?? Date.now());
   const [applyToAll, setApplyToAll] = useState(false);
 
-  // Account picker — new manual entries only (6e). Editing an existing row
-  // never retro-adjusts a balance, so there's nothing useful to pick here.
-  const [accounts, setAccounts] = useState<{ account: string; balance: number }[]>([]);
-  const [selectedAccount, setSelectedAccount] = useState<string | null>(null);
+  // Pair-to-cancel links: rows that settle this one, or the row this one settles.
+  const [linkTick, setLinkTick] = useState(0);
+  const [showPairs, setShowPairs] = useState(false);
+  const [pairSearch, setPairSearch] = useState('');
+  const links = useMemo(
+    () =>
+      isEdit && tx?.id != null
+        ? getSettlementLinks(tx.id)
+        : { children: [] as TransactionRow[], parent: null as TransactionRow | null },
+    // linkTick forces a re-read after a link/unlink
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isEdit, tx?.id, linkTick],
+  );
+  const pairable = isEdit && tx?.id != null && tx.settles_id == null && tx.type !== 'self';
+  const paidSoFar = links.children
+    .filter(c => c.type !== tx?.type)
+    .reduce((a, c) => a + c.amount, 0);
+  const pairSuggestions = useMemo(() => {
+    if (!showPairs || !pairable || tx?.id == null) {
+      return [];
+    }
+    const t = tx.type as 'expense' | 'income';
+    const q = pairSearch.trim().toLowerCase();
+    let candidates = getPairCandidates({ id: tx.id, type: t, timestamp: tx.timestamp });
+    if (q) {
+      // Search by amount ("500", "1,200") or by name/VPA/merchant.
+      candidates = candidates.filter(
+        c =>
+          String(c.amount).includes(q.replace(/,/g, '')) ||
+          `${c.counterparty ?? ''} ${c.merchant ?? ''}`.toLowerCase().includes(q),
+      );
+    }
+    return suggestPairs(
+      {
+        id: tx.id,
+        type: t,
+        amount: tx.amount,
+        timestamp: tx.timestamp,
+        counterparty: tx.counterparty,
+        merchant: tx.merchant,
+        alreadyPaid: paidSoFar,
+      },
+      candidates,
+      { knownCounterparties: getKnownSettlementCounterparties() },
+      q ? 10 : 5,
+    );
+  }, [showPairs, pairable, tx, paidSoFar, pairSearch]);
 
-  useEffect(() => {
-    if (isEdit) {
+  function linkPair(childId: number | undefined) {
+    if (childId == null || tx?.id == null) {
       return;
     }
-    const balances = getAllAccountBalances();
-    setAccounts(balances);
-    if (balances.length === 1) {
-      setSelectedAccount(balances[0].account);
+    setSettlement(childId, tx.id);
+    DeviceEventEmitter.emit(DATA_CHANGED);
+    setShowPairs(false);
+    setPairSearch('');
+    setLinkTick(n => n + 1);
+  }
+
+  function unlinkPair(childId: number | undefined) {
+    if (childId == null) {
+      return;
     }
-  }, [isEdit]);
+    setSettlement(childId, null);
+    DeviceEventEmitter.emit(DATA_CHANGED);
+    setLinkTick(n => n + 1);
+  }
 
   // Keyboard-safe scrolling (6a): the Note field can sit near the bottom of
   // the form and nothing lifted the screen above the keyboard, so the user
@@ -238,18 +302,6 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
         raw_text: null,
       });
 
-      // Smart deduction: only for a NEW manual entry against a picked
-      // account. Uses Date.now() (not the transaction's own date) as the
-      // balance timestamp so it always wins over an older SMS-derived
-      // balance per setAccountBalance's newer-wins guard. Self-transfers
-      // don't move a single account's balance either direction.
-      if (selectedAccount && (type === 'expense' || type === 'income')) {
-        const current = getAccountBalance(selectedAccount);
-        if (current) {
-          const delta = type === 'expense' ? -amountNum : amountNum;
-          setAccountBalance(selectedAccount, current.balance + delta, Date.now());
-        }
-      }
     }
 
     DeviceEventEmitter.emit(DATA_CHANGED);
@@ -264,7 +316,6 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
     isEdit,
     tx,
     applyToAll,
-    selectedAccount,
     navigation,
   ]);
 
@@ -290,6 +341,13 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
     );
   }, [isEdit, tx, navigation]);
 
+  const [editingHeader, setEditingHeader] = useState(!isEdit);
+  const [showRaw, setShowRaw] = useState(false);
+  const allCategories = GROUPED_CATEGORIES.flatMap(g => g.categories);
+  const canMarkSelf = isEdit && tx?.id != null && type !== 'self' && tx.settles_id == null;
+  const isUberRide = isEdit && tx?.category === 'Uber' && tx.type === 'expense' && tx.settles_id == null;
+  const hasActions = canMarkSelf || pairable || tx?.settles_id != null || isUberRide;
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
@@ -302,181 +360,87 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
       contentContainerStyle={styles.content}
       keyboardShouldPersistTaps="handled"
     >
-      {/* Amount */}
-      <SectionHeader title="Amount (₹)" />
-      <View style={styles.card}>
-        <TextInput
-          style={styles.amountInput}
-          value={amount}
-          onChangeText={setAmount}
-          keyboardType="decimal-pad"
-          placeholder="0.00"
-          placeholderTextColor={theme.colors.textMuted}
-          autoFocus={!isEdit}
-        />
-      </View>
+      {/* Header: amount · merchant · date — tap to edit in place */}
+      {editingHeader ? (
+        <View style={styles.card}>
+          <TextInput
+            style={styles.amountInput}
+            value={amount}
+            onChangeText={setAmount}
+            keyboardType="decimal-pad"
+            placeholder="0.00"
+            placeholderTextColor={theme.colors.textMuted}
+            autoFocus={!isEdit}
+          />
+          <TextInput
+            style={styles.textInput}
+            value={merchant}
+            onChangeText={setMerchant}
+            placeholder="Merchant name"
+            placeholderTextColor={theme.colors.textMuted}
+            returnKeyType="next"
+          />
+          <View style={styles.dateTimeRow}>
+            <TouchableOpacity style={styles.dateTimeBtn} onPress={openDatePicker}>
+              <Icon name="calendar" size={16} color={theme.colors.accent} />
+              <Text style={styles.dateTimeText}>{formatDate(timestamp)}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.dateTimeBtn} onPress={openTimePicker}>
+              <Text style={styles.dateTimeText}>{formatTime(timestamp)}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.shortcutBtn} onPress={setToday}>
+              <Text style={styles.shortcutText}>Today</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.shortcutBtn} onPress={setYesterday}>
+              <Text style={styles.shortcutText}>Yest.</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : (
+        <TouchableOpacity
+          style={[styles.card, styles.header]}
+          onPress={() => setEditingHeader(true)}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.headerAmount}>{rupees(parseFloat(amount) || 0)}</Text>
+          <Text style={styles.headerSub} numberOfLines={1}>
+            {displayMerchant(merchant) || tx?.source || 'No merchant'} · {formatDate(timestamp)} {formatTime(timestamp)}
+          </Text>
+        </TouchableOpacity>
+      )}
 
       {/* Type */}
-      <SectionHeader title="Type" />
-      <View style={styles.card}>
-        <View style={styles.segRow}>
-          {TYPE_SEGMENTS.map(seg => (
-            <TouchableOpacity
-              key={seg.value}
-              style={[
-                styles.segment,
-                type === seg.value ? styles.segmentActive : undefined,
-              ]}
-              onPress={() => setType(seg.value)}
+      <View style={[styles.card, styles.segRow]}>
+        {TYPE_SEGMENTS.map(seg => (
+          <TouchableOpacity
+            key={seg.value}
+            style={[styles.segment, type === seg.value ? styles.segmentActive : undefined]}
+            onPress={() => setType(seg.value)}
+          >
+            <Text
+              style={[styles.segmentText, type === seg.value ? styles.segmentTextActive : undefined]}
             >
-              <Text
-                style={[
-                  styles.segmentText,
-                  type === seg.value ? styles.segmentTextActive : undefined,
-                ]}
-              >
-                {seg.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+              {seg.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
       </View>
 
       {/* Category */}
-      <SectionHeader title="Category" />
-      {GROUPED_CATEGORIES.map(({ group, categories }) => (
-        <View key={group}>
-          <Text style={styles.groupLabel}>{group.toUpperCase()}</Text>
-          <View style={[styles.card, styles.catCard]}>
-            {categories.map(cat => (
-              <TouchableOpacity
-                key={cat}
-                onPress={() => setCategory(cat)}
-                style={[
-                  styles.catChip,
-                  category === cat ? styles.catChipActive : undefined,
-                ]}
-              >
-                <CategoryChip category={cat} small />
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-      ))}
-
-      {/* Merchant */}
-      <SectionHeader title="Merchant" />
-      <View style={styles.card}>
-        <TextInput
-          style={styles.textInput}
-          value={merchant}
-          onChangeText={setMerchant}
-          placeholder="Merchant name"
-          placeholderTextColor={theme.colors.textMuted}
-          returnKeyType="next"
-        />
+      <View style={[styles.card, styles.catCard]}>
+        {allCategories.map(cat => (
+          <TouchableOpacity
+            key={cat}
+            onPress={() => setCategory(cat)}
+            style={[styles.catChip, category === cat ? styles.catChipActive : undefined]}
+          >
+            <CategoryChip category={cat} small />
+          </TouchableOpacity>
+        ))}
       </View>
-
-      {/* Date */}
-      <SectionHeader title="Date & Time" />
-      <View style={styles.card}>
-        <View style={styles.dateTimeRow}>
-          <TouchableOpacity style={styles.dateTimeBtn} onPress={openDatePicker}>
-            <Icon name="calendar" size={16} color={theme.colors.accent} />
-            <Text style={styles.dateTimeText}>{formatDate(timestamp)}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.dateTimeBtn} onPress={openTimePicker}>
-            <Text style={styles.dateTimeText}>{formatTime(timestamp)}</Text>
-          </TouchableOpacity>
-        </View>
-        <View style={styles.dateShortcuts}>
-          <TouchableOpacity style={styles.shortcutBtn} onPress={setToday}>
-            <Text style={styles.shortcutText}>Today</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.shortcutBtn} onPress={setYesterday}>
-            <Text style={styles.shortcutText}>Yesterday</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {/* Settlement link — shown only when this row settles another one.
-          Every link MUST be undoable here: a settled row is excluded from
-          spend/income totals, and an exclusion the user can't find or reverse
-          is indistinguishable from lost data. */}
-      {tx?.settles_id != null && (
-        <>
-          <SectionHeader title="Settlement" />
-          <View style={styles.card}>
-            <Text style={styles.settlementText}>
-              This payment is linked to another transaction, so it isn’t counted
-              as separate spending.
-            </Text>
-            <TouchableOpacity
-              style={styles.unlinkBtn}
-              onPress={() => {
-                if (tx?.id != null) {
-                  setSettlement(tx.id, null);
-                  DeviceEventEmitter.emit(DATA_CHANGED);
-                  navigation.goBack();
-                }
-              }}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.unlinkText}>Unlink — count it on its own</Text>
-            </TouchableOpacity>
-          </View>
-        </>
-      )}
-
-      {/* Note */}
-      <SectionHeader title="Note (optional)" />
-      <View
-        style={styles.card}
-        onLayout={e => { noteFieldY.current = e.nativeEvent.layout.y; }}
-      >
-        <TextInput
-          style={[styles.textInput, styles.noteInput]}
-          value={note}
-          onChangeText={setNote}
-          onFocus={() => scrollFieldIntoView(noteFieldY.current)}
-          placeholder="Add a note…"
-          placeholderTextColor={theme.colors.textMuted}
-          multiline
-          returnKeyType="done"
-        />
-      </View>
-
-      {/* Account (new manual entries only) — deducts/adds the amount from
-          the picked account's last-known balance on save (6e). */}
-      {!isEdit && accounts.length > 0 && (type === 'expense' || type === 'income') && (
-        <>
-          <SectionHeader title="Account (optional)" />
-          <View style={[styles.card, styles.catCard]}>
-            <TouchableOpacity
-              onPress={() => setSelectedAccount(null)}
-              style={[styles.acctChip, selectedAccount === null ? styles.acctChipActive : undefined]}
-            >
-              <Text style={styles.acctChipText}>None</Text>
-            </TouchableOpacity>
-            {accounts.map(a => (
-              <TouchableOpacity
-                key={a.account}
-                onPress={() => setSelectedAccount(a.account)}
-                style={[styles.acctChip, selectedAccount === a.account ? styles.acctChipActive : undefined]}
-              >
-                <Text style={styles.acctChipText}>{a.account}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </>
-      )}
-
-      {/* Apply category to all matching (edit only, category changed) */}
-      {isEdit && (
+      {isEdit && category !== tx?.category && (
         <View style={[styles.card, styles.toggleRow]}>
-          <Text style={styles.toggleLabel}>
-            Always use this category for this merchant
-          </Text>
+          <Text style={styles.toggleLabel}>Always use this category for this merchant</Text>
           <Switch
             value={applyToAll}
             onValueChange={setApplyToAll}
@@ -486,20 +450,152 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
         </View>
       )}
 
-      {/* Save button */}
-      <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-        <Text style={styles.saveBtnText}>{isEdit ? 'Save Changes' : 'Add Transaction'}</Text>
-      </TouchableOpacity>
+      {/* Note */}
+      <View style={styles.card} onLayout={e => { noteFieldY.current = e.nativeEvent.layout.y; }}>
+        <TextInput
+          style={styles.textInput}
+          value={note}
+          onChangeText={setNote}
+          onFocus={() => scrollFieldIntoView(noteFieldY.current)}
+          placeholder="Note"
+          placeholderTextColor={theme.colors.textMuted}
+          returnKeyType="done"
+          maxLength={200}
+        />
+      </View>
 
-      {/* Delete button (edit only) */}
+      {/* Actions: only what applies to this row. Every link stays undoable here:
+          a settled row is excluded from spend/income totals, and an exclusion the
+          user can't find or reverse is indistinguishable from lost data. */}
+      {hasActions && (
+        <View style={styles.card}>
+          {tx?.settles_id != null && (
+            <Text style={styles.settlementText}>
+              {links.parent
+                ? `Cancels ${rupees(tx.amount)} ${
+                    tx.type === 'income' ? 'payment to' : 'received from'
+                  } ${whoIs(links.parent)}`
+                : 'Linked to another transaction, so it is not counted as separate spending.'}
+            </Text>
+          )}
+          {pairable &&
+            links.children.map(c => (
+              <View key={c.id} style={styles.pairRow}>
+                <Text style={[styles.settlementText, styles.pairText]}>
+                  {c.type !== tx?.type ? 'Paid back' : 'Linked'} {rupees(c.amount)} by {whoIs(c)}
+                </Text>
+                <TouchableOpacity onPress={() => unlinkPair(c.id)}>
+                  <Text style={styles.unlinkText}>Unlink</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+          <View style={styles.actionsRow}>
+            {tx?.settles_id != null && (
+              <TouchableOpacity
+                style={styles.actionBtn}
+                onPress={() => {
+                  if (tx?.id != null) {
+                    setSettlement(tx.id, null);
+                    DeviceEventEmitter.emit(DATA_CHANGED);
+                    navigation.goBack();
+                  }
+                }}
+              >
+                <Text style={styles.unlinkText}>Unlink</Text>
+              </TouchableOpacity>
+            )}
+            {pairable && (
+              <TouchableOpacity style={styles.actionBtn} onPress={() => setShowPairs(true)}>
+                <Text style={styles.unlinkText}>Cancel out…</Text>
+              </TouchableOpacity>
+            )}
+            {canMarkSelf && tx && (
+              <TouchableOpacity
+                style={styles.actionBtn}
+                onPress={() => promptMarkTransfer(tx, () => navigation.goBack())}
+              >
+                <Text style={styles.unlinkText}>Transfer to self</Text>
+              </TouchableOpacity>
+            )}
+            {isUberRide && (
+              <TouchableOpacity style={styles.actionBtn} onPress={() => navigation.navigate('Uber')}>
+                <Text style={styles.unlinkText}>Uber split</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      )}
+
+      {/* Raw SMS — collapsed */}
+      {isEdit && tx?.raw_text ? (
+        <TouchableOpacity
+          style={styles.card}
+          onPress={() => setShowRaw(v => !v)}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.settlementText}>{showRaw ? '▾' : '▸'} Original message</Text>
+          {showRaw && <Text style={styles.rawText}>{tx.raw_text}</Text>}
+        </TouchableOpacity>
+      ) : null}
+
       {isEdit && (
         <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete}>
-          <Text style={styles.deleteBtnText}>Delete Transaction</Text>
+          <Text style={styles.deleteBtnText}>Delete transaction</Text>
         </TouchableOpacity>
       )}
 
-      <View style={styles.bottomPad} />
+      <Modal
+        visible={showPairs}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowPairs(false)}
+      >
+        <View style={styles.pairOverlay}>
+          <View style={styles.pairSheet}>
+            <Text style={styles.pairTitle}>Cancel out with…</Text>
+            <TextInput
+              style={styles.pairSearch}
+              value={pairSearch}
+              onChangeText={setPairSearch}
+              placeholder="Search by amount or name"
+              placeholderTextColor={theme.colors.textMuted}
+              autoCorrect={false}
+            />
+            {pairSuggestions.length === 0 ? (
+              <Text style={styles.settlementText}>
+                No matching {tx?.type === 'income' ? 'debit' : 'credit'} found{pairSearch.trim() ? ' for that search' : ''}.
+              </Text>
+            ) : (
+              pairSuggestions.map(sug => (
+                <TouchableOpacity
+                  key={sug.candidate.id}
+                  style={styles.pairCand}
+                  onPress={() => linkPair(sug.candidate.id)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.pairCandMain}>
+                    {rupees(sug.candidate.amount)} · {whoIs(sug.candidate)}
+                  </Text>
+                  <Text style={styles.pairCandSub}>
+                    {formatDate(sug.candidate.timestamp)} · {sug.reason}
+                  </Text>
+                </TouchableOpacity>
+              ))
+            )}
+            <TouchableOpacity style={styles.unlinkBtn} onPress={() => { setShowPairs(false); setPairSearch(''); }}>
+              <Text style={styles.unlinkText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
+
+    {/* Sticky save */}
+    <View style={styles.saveBar}>
+      <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
+        <Text style={styles.saveBtnText}>{isEdit ? 'Save' : 'Add transaction'}</Text>
+      </TouchableOpacity>
+    </View>
     </KeyboardAvoidingView>
   );
 }
@@ -555,15 +651,6 @@ const styles = StyleSheet.create({
   segmentTextActive: {
     color: theme.colors.accent,
   },
-  groupLabel: {
-    fontSize: theme.font.size.xs,
-    fontWeight: theme.font.weight.semibold,
-    color: theme.colors.textMuted,
-    letterSpacing: 1.1,
-    marginTop: theme.spacing.sm,
-    marginBottom: theme.spacing.xs,
-    marginLeft: theme.spacing.md,
-  },
   catCard: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -574,22 +661,6 @@ const styles = StyleSheet.create({
   },
   catChipActive: {
     opacity: 1,
-  },
-  acctChip: {
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.xs,
-    borderRadius: theme.radius.pill,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surfaceAlt,
-  },
-  acctChipActive: {
-    borderColor: theme.colors.accent,
-    backgroundColor: theme.colors.accent + '22',
-  },
-  acctChipText: {
-    fontSize: theme.font.size.xs,
-    color: theme.colors.textSecondary,
   },
   textInput: {
     fontSize: theme.font.size.md,
@@ -611,9 +682,56 @@ const styles = StyleSheet.create({
     fontWeight: theme.font.weight.semibold,
     color: theme.colors.accent,
   },
-  noteInput: {
-    minHeight: 64,
-    textAlignVertical: 'top',
+  pairRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  pairText: {
+    flex: 1,
+    marginRight: theme.spacing.md,
+  },
+  pairOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'flex-end',
+  },
+  pairSheet: {
+    backgroundColor: theme.colors.surface,
+    borderTopLeftRadius: theme.radius.lg,
+    borderTopRightRadius: theme.radius.lg,
+    padding: theme.spacing.lg,
+    paddingBottom: 40,
+  },
+  pairSearch: {
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 10,
+    color: theme.colors.textPrimary,
+  },
+  pairTitle: {
+    fontSize: theme.font.size.lg,
+    fontWeight: theme.font.weight.bold,
+    color: theme.colors.textPrimary,
+    marginBottom: theme.spacing.md,
+  },
+  pairCand: {
+    paddingVertical: theme.spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+  },
+  pairCandMain: {
+    fontSize: theme.font.size.md,
+    color: theme.colors.textPrimary,
+    fontWeight: theme.font.weight.medium,
+  },
+  pairCandSub: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textMuted,
+    marginTop: 2,
   },
   dateTimeRow: {
     flexDirection: 'row',
@@ -635,11 +753,6 @@ const styles = StyleSheet.create({
     fontSize: theme.font.size.md,
     color: theme.colors.textPrimary,
     fontWeight: theme.font.weight.medium,
-  },
-  dateShortcuts: {
-    flexDirection: 'row',
-    gap: theme.spacing.sm,
-    marginTop: theme.spacing.sm,
   },
   shortcutBtn: {
     paddingHorizontal: theme.spacing.md,
@@ -665,9 +778,23 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
     marginRight: theme.spacing.md,
   },
+  header: { alignItems: 'center', paddingVertical: theme.spacing.lg },
+  headerAmount: {
+    fontSize: theme.font.size.xxl,
+    fontWeight: theme.font.weight.bold,
+    color: theme.colors.textPrimary,
+  },
+  headerSub: { fontSize: theme.font.size.sm, color: theme.colors.textMuted, marginTop: 2 },
+  actionsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.spacing.lg },
+  actionBtn: { paddingVertical: theme.spacing.xs },
+  rawText: { fontSize: theme.font.size.xs, color: theme.colors.textMuted },
+  saveBar: {
+    padding: theme.spacing.md,
+    backgroundColor: theme.colors.bg,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border,
+  },
   saveBtn: {
-    margin: theme.spacing.lg,
-    marginTop: theme.spacing.xl,
     backgroundColor: theme.colors.accent,
     borderRadius: theme.radius.md,
     padding: theme.spacing.lg,
@@ -690,8 +817,5 @@ const styles = StyleSheet.create({
     color: theme.colors.danger,
     fontSize: theme.font.size.md,
     fontWeight: theme.font.weight.medium,
-  },
-  bottomPad: {
-    height: theme.spacing.xxl,
   },
 });

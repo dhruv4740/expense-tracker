@@ -65,7 +65,13 @@ class NotificationModule(private val reactContext: ReactApplicationContext) :
             "com.sbi.SBIFreedomPlus"                  to "SBI YONO",
             "com.axis.mobile"                         to "Axis Mobile",
             "com.msf.kbank.mobile"                    to "Kotak",
-            "com.bankofbaroda.mconnect"               to "Bank of Baroda"
+            "com.bankofbaroda.mconnect"               to "Bank of Baroda",
+            "com.ubercab"                             to "Uber",
+            "com.hdfcbank.android.now"                to "HDFC Bank",
+            "com.kotak811mobilebankingapp.instantsavingsupiscanandpayrecharge" to "Kotak811",
+            "com.fampay.in"                           to "FamPay",
+            "com.nextbillion.groww"                   to "Groww",
+            "in.amazon.mShop.android.shopping"        to "Amazon"
         )
 
         /**

@@ -36,6 +36,7 @@ import {
 import type { TransactionRow, TransactionType, TransactionFilters } from '../db';
 import { GROUPED_CATEGORIES } from '../categories';
 import { DATA_CHANGED } from '../sync';
+import { promptMarkTransfer } from './markTransfer';
 import {
   AmountText,
   CategoryChip,
@@ -45,6 +46,7 @@ import {
   SectionHeader,
 } from '../components';
 import { theme } from '../theme';
+import { displayMerchant } from '../merchantDisplay';
 import { formatDate, groupByDay, monthRange, lastNDaysRange } from '../dates';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -65,6 +67,7 @@ interface FilterState {
 
 interface Props {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Tabs'>;
+  route?: { params?: { category?: string; datePreset?: 'month' | 'lastmonth'; nonce?: number } };
 }
 
 // ─── Row component (memoised for SectionList perf) ────────────────────────────
@@ -79,7 +82,7 @@ const TxRow = React.memo(function TxRow({
   onLongPress: () => void;
 }) {
   const displayName =
-    item.merchant ?? item.counterparty ?? item.source ?? 'Unknown';
+    displayMerchant(item.merchant) ?? item.counterparty ?? item.source ?? 'Unknown';
   return (
     <TouchableOpacity
       style={styles.row}
@@ -101,6 +104,11 @@ const TxRow = React.memo(function TxRow({
         </View>
         <Text style={styles.rowSub} numberOfLines={1}>
           {formatDate(item.timestamp)}
+          {item.paid_back != null && item.paid_back > 0
+            ? item.paid_back >= item.amount
+              ? '  ·  ↺ settled'
+              : `  ·  net ₹${Math.round((item.amount - item.paid_back) * 100) / 100}`
+            : ''}
         </Text>
       </View>
       <AmountText amount={item.amount} type={item.type} size={theme.font.size.md} />
@@ -368,8 +376,22 @@ const DEFAULT_FILTER: FilterState = {
 
 // ─── Screen ──────────────────────────────────────────────────────────────────
 
-export default function TransactionsScreen({ navigation }: Props) {
+export default function TransactionsScreen({ navigation, route }: Props) {
   const [filter, setFilter] = useState<FilterState>(DEFAULT_FILTER);
+
+  // Dashboard → category tap: open pre-filtered to that category and month.
+  const routeCategory = route?.params?.category;
+  const routePreset = route?.params?.datePreset;
+  const routeNonce = route?.params?.nonce;
+  useEffect(() => {
+    if (routeCategory) {
+      setFilter(f => ({
+        ...f,
+        selectedCategories: [routeCategory],
+        datePreset: routePreset ?? 'month',
+      }));
+    }
+  }, [routeCategory, routePreset, routeNonce]);
   const [sections, setSections] = useState<Section[]>([]);
   const [showFilter, setShowFilter] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -432,6 +454,14 @@ export default function TransactionsScreen({ navigation }: Props) {
             text: 'Edit',
             onPress: () => navigation.navigate('EditTransaction', { tx: item }),
           },
+          ...(item.type !== 'self' && item.settles_id == null
+            ? [
+                {
+                  text: 'Mark as transfer to self',
+                  onPress: () => promptMarkTransfer(item),
+                },
+              ]
+            : []),
           {
             text: 'Delete',
             style: 'destructive',
@@ -444,6 +474,7 @@ export default function TransactionsScreen({ navigation }: Props) {
           },
           { text: 'Cancel', style: 'cancel' },
         ],
+        { cancelable: true }, // Android shows at most 3 buttons; tap outside to dismiss
       );
     },
     [navigation],

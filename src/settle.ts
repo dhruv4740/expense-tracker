@@ -224,3 +224,267 @@ export function suggestSettlements(
 
   return [...best.values()].sort((a, b) => b.score - a.score).slice(0, limit);
 }
+
+
+// ─── Generic pair-to-cancel ───────────────────────────────────────────────────
+//
+// Any expense can be cancelled (in part) by an income that repays it, and any
+// income by an expense that returns it. Two surfaces use this, with different
+// strictness because a wrong link hides money from the totals:
+//  - on demand (Edit screen): NO time limit, ranked by score, top few shown
+//    with an honest reason line, so the user can still find a late payback;
+//  - proactive (Dashboard banner): only the high-confidence shapes in
+//    isBannerWorthy(). Equal amounts alone are noise (₹2000/₹1000/₹50 recur),
+//    so a banner also needs tight timing or a known person.
+// Repayments are NEVER linked automatically.
+
+/** Minimum score for a pair candidate to be offered on demand. */
+export const PAIR_CUTOFF = 10;
+
+export interface PairParent {
+  id: number;
+  type: 'expense' | 'income';
+  amount: number;
+  timestamp: number;
+  counterparty?: string | null;
+  merchant?: string | null;
+  /** Already cancelled by linked rows; remaining = amount - alreadyPaid. */
+  alreadyPaid?: number;
+}
+
+export interface PairScore {
+  score: number;
+  reason: string;
+  /** Candidate equals the remainder (±0.5). */
+  exact: boolean;
+  /** Candidate is 1/2, 1/3 or 1/4 of the remainder (an equal share). */
+  share: boolean;
+  deltaDays: number;
+  samePerson: boolean;
+  knownPerson: boolean;
+  /** Salary / interest / cashback / refund wording. */
+  penalized: boolean;
+}
+
+export interface PairSuggestion extends PairScore {
+  candidate: CandidateTx;
+}
+
+function personKey(s?: string | null): string {
+  return (s ?? '').toLowerCase().replace(/[^a-z0-9@]/g, '');
+}
+
+const NO_PAIR: PairScore = {
+  score: 0, reason: '', exact: false, share: false, deltaDays: 0,
+  samePerson: false, knownPerson: false, penalized: false,
+};
+
+function daysLabel(d: number): string {
+  if (d < 1) {
+    return 'same day';
+  }
+  const n = Math.round(d);
+  return `${n} day${n === 1 ? '' : 's'} later`;
+}
+
+export function scorePair(
+  parent: PairParent,
+  candidate: CandidateTx,
+  ctx: ScoreContext = {},
+): PairScore {
+  if (candidate.type === 'self' || candidate.type === parent.type) {
+    return NO_PAIR; // must be the opposite direction
+  }
+  if (candidate.settles_id != null || candidate.category === 'Investment') {
+    return NO_PAIR;
+  }
+  if (candidate.id != null && candidate.id === parent.id) {
+    return NO_PAIR;
+  }
+  const remaining = parent.amount - (parent.alreadyPaid ?? 0);
+  if (!(remaining > 0) || !(candidate.amount > 0)) {
+    return NO_PAIR;
+  }
+  if (candidate.amount > remaining + AMOUNT_EPSILON) {
+    return NO_PAIR;
+  }
+  const deltaMs = candidate.timestamp - parent.timestamp;
+  if (deltaMs < -12 * 3600_000) {
+    return NO_PAIR; // a payback cannot precede what it repays
+  }
+  const deltaDays = Math.max(deltaMs / DAY_MS, 0);
+
+  const exact = approxEqual(candidate.amount, remaining);
+  // Equal shares of an uneven split differ by rounding, so allow ₹1 here.
+  const share =
+    !exact && [2, 3, 4].some(n => approxEqual(candidate.amount, remaining / n, 1));
+
+  let score: number;
+  const parts: string[] = [];
+  if (exact) {
+    score = 50;
+    parts.push('Same amount');
+  } else if (share) {
+    score = 32;
+    parts.push('Equal share');
+  } else {
+    score = 8 + Math.round((candidate.amount / remaining) * 14);
+    parts.push(`Part (₹${formatAmount(candidate.amount)} of ₹${formatAmount(remaining)})`);
+  }
+
+  // Strong within 3 days, fading afterwards — never a hard stop.
+  if (deltaDays <= 3) {
+    score += 30;
+  } else {
+    score += Math.round(30 * Math.exp(-(deltaDays - 3) / 12));
+  }
+  parts.push(daysLabel(deltaDays));
+
+  const candKeys = [personKey(candidate.counterparty), personKey(candidate.merchant)].filter(Boolean);
+  const parentKeys = [personKey(parent.counterparty), personKey(parent.merchant)].filter(Boolean);
+  const samePerson = candKeys.some(k => parentKeys.includes(k));
+  const cp = candidate.counterparty?.toLowerCase();
+  const knownPerson = !samePerson && !!cp && !!ctx.knownCounterparties?.includes(cp);
+  if (samePerson) {
+    score += 35;
+    parts.push('same person');
+  } else if (knownPerson) {
+    score += 20;
+    parts.push('has settled with you before');
+  } else {
+    parts.push('different person');
+  }
+
+  const penalized = NON_REIMBURSEMENT_RE.test(
+    `${candidate.merchant ?? ''} ${candidate.raw_text ?? ''}`,
+  );
+  if (penalized) {
+    score -= 40;
+    parts.push('looks like salary/interest/refund');
+  }
+
+  return {
+    score, reason: parts.join(' · '), exact, share, deltaDays,
+    samePerson, knownPerson, penalized,
+  };
+}
+
+/**
+ * Best repayment candidates for one parent row (expense or income), strongest
+ * first, at most `limit`. No time limit — recency only affects the ranking.
+ */
+export function suggestPairs(
+  parent: PairParent,
+  candidates: CandidateTx[],
+  ctx: ScoreContext = {},
+  limit = 5,
+): PairSuggestion[] {
+  const out: PairSuggestion[] = [];
+  for (const candidate of candidates) {
+    const s = scorePair(parent, candidate, ctx);
+    if (s.score >= PAIR_CUTOFF) {
+      out.push({ ...s, candidate });
+    }
+  }
+  return out.sort((a, b) => b.score - a.score).slice(0, limit);
+}
+
+/**
+ * Is this pair strong enough to raise a proactive banner? Exact (or equal-share)
+ * amount AND the same or a known person, within 30 days. Same amount + same day
+ * from a different person is NOT enough (it stays in the on-demand ranked list):
+ * a ₹1,200 shop payment and a ₹1,200 credit from a friend are just a coincidence.
+ * Anything salary/refund-like never qualifies.
+ */
+export function isBannerWorthy(s: PairScore): boolean {
+  if (s.score <= 0 || s.penalized || !(s.exact || s.share)) {
+    return false;
+  }
+  return (s.samePerson || s.knownPerson) && s.deltaDays <= 30;
+}
+
+/** Company-style names ("RELIANCE RETAIL LIMITE", "Acme Pvt Ltd") are never a friend to repay. */
+const BUSINESS_NAME_RE =
+  /\b(limite?d?|ltd|pvt|private|retail|systems?|services?|enterprises?|industries|technologies|solutions|stores?|mart|traders?|corp(?:oration)?|inc|llp|bank|payments?)\b/i;
+
+export function isBusinessName(...names: Array<string | null | undefined>): boolean {
+  return names.some(n => !!n && BUSINESS_NAME_RE.test(n));
+}
+
+export interface BannerRow extends CandidateTx {
+  id: number;
+  type: 'expense' | 'income' | 'self';
+  /** Sum of opposite-direction rows already linked to this one. */
+  paid_back?: number;
+  /** Count of rows linked as children of this one. */
+  has_children?: boolean;
+}
+
+export interface RepaymentBanner {
+  parent: BannerRow;
+  candidate: BannerRow;
+  reason: string;
+  score: number;
+}
+
+export function pairKey(parentId: number, candidateId: number): string {
+  return `${parentId}:${candidateId}`;
+}
+
+/**
+ * The single best proactive repayment banner among recent rows, or null.
+ * `rows` should cover roughly the last 30 days; the earlier row of a pair is
+ * treated as the parent. Dismissed pair keys are never offered again.
+ */
+export function pickRepaymentBanner(
+  rows: BannerRow[],
+  ctx: ScoreContext,
+  dismissed: Set<string>,
+): RepaymentBanner | null {
+  let best: RepaymentBanner | null = null;
+  for (const parent of rows) {
+    if (parent.type === 'self' || parent.settles_id != null || parent.category === 'Investment') {
+      continue;
+    }
+    const p: PairParent = {
+      id: parent.id,
+      type: parent.type,
+      amount: parent.amount,
+      timestamp: parent.timestamp,
+      counterparty: parent.counterparty,
+      merchant: parent.merchant,
+      alreadyPaid: parent.paid_back ?? 0,
+    };
+    for (const candidate of rows) {
+      if (
+        candidate.has_children ||
+        dismissed.has(pairKey(parent.id, candidate.id)) ||
+        candidate.timestamp < parent.timestamp
+      ) {
+        continue;
+      }
+      if (
+        isBusinessName(parent.merchant, parent.counterparty) ||
+        isBusinessName(candidate.merchant, candidate.counterparty)
+      ) {
+        continue;
+      }
+      const s = scorePair(p, candidate, ctx);
+      if (isBannerWorthy(s) && (!best || s.score > best.score)) {
+        best = { parent, candidate, reason: s.reason, score: s.score };
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * One-tap split: a ride of `amount` shared by `people` (including you) leaves
+ * the other people owing (people-1)/people of it. Rounded to paise.
+ */
+export function splitOwed(amount: number, people: number): number {
+  if (!(people >= 2) || !(amount > 0)) {
+    return 0;
+  }
+  return Math.round(((amount * (people - 1)) / people) * 100) / 100;
+}

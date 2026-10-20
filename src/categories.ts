@@ -14,6 +14,8 @@ export type Category =
   | 'UPI'
   | 'Cash'
   | 'Income'
+  | 'Cashback'
+  | 'Family'
   | 'Friend Transfer'
   | 'Loan/Dues'
   | 'Other';
@@ -33,6 +35,8 @@ export const CATEGORIES: Category[] = [
   'UPI',
   'Cash',
   'Income',
+  'Cashback',
+  'Family',
   'Friend Transfer',
   'Loan/Dues',
   'Other',
@@ -64,6 +68,8 @@ export const CATEGORY_META: Record<Category, CategoryMeta> = {
   UPI:           { color: '#7E57C2', icon: 'swap-horizontal' },
   Cash:          { color: '#A5D6A7', icon: 'cash' },
   Income:        { color: '#66BB6A', icon: 'trending-up' },
+  Cashback:      { color: '#AED581', icon: 'gift' },
+  Family:        { color: '#FF8A80', icon: 'home' },
   'Friend Transfer': { color: '#26A69A', icon: 'person' },
   'Loan/Dues':   { color: '#8D6E63', icon: 'wallet' },
   Other:         { color: '#78909C', icon: 'ellipsis-horizontal' },
@@ -114,6 +120,8 @@ export const GROUP_OF: Record<Category, CategoryGroup> = {
   'Friend Transfer': 'Transfers',
   'Loan/Dues': 'Transfers',
   Income: 'Income',
+  Cashback: 'Income',
+  Family: 'Income',
   Other: 'Other',
 };
 
@@ -175,20 +183,27 @@ const KEYWORD_MAP: Array<{
     // ride stats and the fare-split averages.
     brands: [
       'uber eats', 'ubereats', 'swiggy', 'zomato', 'dominos', 'pizza hut',
-      'mcdonald', 'kfc', 'starbucks', 'faasos', 'behrouz', 'eatsure',
+      'mcdonald', 'mc donalds', 'mcdonalds', 'kfc', 'starbucks', 'faasos',
+      'behrouz', 'eatsure', 'taco bell', 'popeyes', 'jubilant foodworks',
+      'eternal limited', 'district dining', 'dineout', 'jumbo king',
+      'urban meals',
     ],
     keywords: [
       'restaurant', 'cafe', 'food', 'pizza', 'burger',
       'biryani', 'diner', 'kitchen', 'eatery', 'dhaba', 'canteen', 'bakery',
+      'sweets', 'juice', 'momo', 'shawarma', 'falahaar',
     ],
     category: 'Food',
   },
   {
     brands: [
       'bigbasket', 'blinkit', 'zepto', 'dmart', 'grofers', 'instamart',
-      'jiomart',
+      'jiomart', 'blink commerce', 'rapsap',
     ],
-    keywords: ['grocery', 'supermarket', 'vegetables', 'fruits'],
+    keywords: [
+      'grocery', 'supermarket', 'vegetables', 'fruits', 'general store',
+      'kirana', 'mart',
+    ],
     category: 'Groceries',
   },
   {
@@ -205,9 +220,12 @@ const KEYWORD_MAP: Array<{
     category: 'Uber',
   },
   {
-    brands: ['irctc', 'rapido', 'redbus', 'fastag', 'olacabs'],
+    brands: [
+      'irctc', 'rapido', 'redbus', 'fastag', 'olacabs', 'roppen transportation',
+      'indian railways', 'cityflo',
+    ],
     keywords: [
-      'ola', 'fuel', 'petrol', 'diesel', 'metro', 'bus',
+      'ola', 'uts', 'fuel', 'petrol', 'diesel', 'metro', 'bus',
       'taxi', 'cab', 'railway', 'flight', 'airline',
       'parking', 'toll',
     ],
@@ -226,6 +244,7 @@ const KEYWORD_MAP: Array<{
       'netflix', 'spotify', 'hotstar', 'prime video', 'bookmyshow', 'pvr',
       'inox', 'youtube', 'disney', 'zee5', 'sonyliv', 'steam',
       'playstation', 'xbox',
+      'district movies',
     ],
     keywords: ['gaming'],
     category: 'Entertainment',
@@ -235,7 +254,7 @@ const KEYWORD_MAP: Array<{
     // SMS land here instead of Bills ("emi") or UPI ("@").
     brands: [
       'zerodha', 'groww', 'upstox', 'smallcase', 'indmoney', 'mutual fund',
-      'iccl',
+      'iccl', 'mf utilities',
     ],
     keywords: ['sip', 'nach', 'kite', 'demat', 'nse', 'bse', 'etf', 'folio', 'mf'],
     category: 'Investment',
@@ -251,7 +270,7 @@ const KEYWORD_MAP: Array<{
     category: 'Education',
   },
   {
-    brands: ['billdesk', 'tata power', 'adani electricity', 'jio', 'airtel', 'vodafone'],
+    brands: ['billdesk', 'tata power', 'adani electricity', 'jio', 'airtel', 'vodafone', 'reliancejio', 'myjio'],
     keywords: [
       'electricity', 'recharge', 'bill', 'dth', 'broadband',
       'insurance', 'emi', 'loan', 'postpaid', 'prepaid', 'utility', 'gas',
@@ -262,7 +281,7 @@ const KEYWORD_MAP: Array<{
   {
     brands: ['apollo', 'pharmeasy', '1mg', 'netmeds', 'practo'],
     keywords: [
-      'pharmacy', 'hospital', 'clinic',
+      'pharmacy', 'chemist', 'hospital', 'clinic',
       'medical', 'doctor', 'dental', 'health', 'medicine', 'lab', 'pathology',
       'diagnostic',
     ],
@@ -305,7 +324,7 @@ function compileMatcher(keywords: string[]): (haystack: string) => boolean {
   const boundaryRe =
     wordKeywords.length > 0
       ? new RegExp(
-          `(?<![a-z0-9])(?:${wordKeywords.map(escapeRegExp).join('|')})(?![a-z0-9])`,
+          `(?<![a-z0-9])(?:${wordKeywords.map(escapeRegExp).join('|')})(?:s|com)?(?![a-z0-9])`,
           'i',
         )
       : null;
@@ -342,7 +361,7 @@ const INCOME_SIGNAL_RE =
   /\b(salary|payroll|interest|dividend|cashback|matured|maturity|pension|stipend|bonus)\b/i;
 
 /** A person-to-person UPI handle (as opposed to a merchant/business VPA). */
-const MERCHANT_VPA_RE =
+export const MERCHANT_VPA_RE =
   /\b(payments?|pay|billdesk|razorpay|payu|merchant|store|retail|enterprises?|pvt|ltd)\b/i;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -363,6 +382,9 @@ export function normalizeMerchantKey(
   return raw.toLowerCase().replace(/\s+/g, ' ');
 }
 
+/** Bank helpline / UPI-block numbers that appear in message footers. */
+const KNOWN_HELPLINES = new Set(['7308080808', '8048329999']);
+
 /**
  * True for merchant-rule keys that are too generic to safely learn a rule
  * from — a bare run of 1-5 digits. These come from account-fragment
@@ -373,6 +395,12 @@ export function normalizeMerchantKey(
  */
 export function isGenericMerchantKey(key: string): boolean {
   if (/^\d{1,5}$/.test(key)) {
+    return true;
+  }
+  // Bank helpline numbers that leak into messages (toll-free 1800/1860,
+  // trunk-prefixed 0xxx, and the UPI-block short code). Shared by every message
+  // from that bank, same as the support addresses below.
+  if (/^(?:1800|1860|0)\d{6,}$/.test(key) || KNOWN_HELPLINES.has(key)) {
     return true;
   }
   // Bank support/no-reply addresses. These are shared by every message from
@@ -479,6 +507,13 @@ function categorizeCredit(name: string, body: string): Category {
   // Explicit income signals win — a salary credit is not a friend transfer.
   if (INCOME_SIGNAL_RE.test(haystack)) {
     return 'Income';
+  }
+
+  // A credit from a broker / fund house is a payout of the user's own money.
+  for (const { category, testName } of COMPILED_KEYWORD_MAP) {
+    if (category === 'Investment' && testName(name)) {
+      return 'Investment';
+    }
   }
 
   // A refund is money coming back from a merchant; keep it in that merchant's

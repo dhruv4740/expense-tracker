@@ -26,7 +26,7 @@ export interface DonutProps {
 }
 
 /**
- * Dark-themed donut chart with an optional centre overlay.
+ * Donut chart drawn on the Card surface colour (not the screen background) with an optional centre overlay.
  * Falls back to EmptyState when there is no data to display.
  */
 const Donut = React.memo(function Donut({
@@ -60,10 +60,10 @@ const Donut = React.memo(function Donut({
         donut
         radius={radius}
         innerRadius={innerRadius}
-        backgroundColor={theme.colors.bg}
-        strokeColor={theme.colors.bg}
+        backgroundColor="transparent"
+        strokeColor={theme.colors.surface}
         strokeWidth={2}
-        innerCircleColor={theme.colors.bg}
+        innerCircleColor={theme.colors.surface}
         centerLabelComponent={() => (
           <View style={styles.centre}>
             {centerValue != null && (
