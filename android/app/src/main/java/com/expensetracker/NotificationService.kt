@@ -47,7 +47,13 @@ class NotificationService : NotificationListenerService() {
             "com.sbi.SBIFreedomPlus",                  // SBI YONO (another variant)
             "com.axis.mobile",                         // Axis Mobile
             "com.msf.kbank.mobile",                    // Kotak Mahindra Bank
-            "com.bankofbaroda.mconnect"                // Bank of Baroda M-Connect
+            "com.bankofbaroda.mconnect",               // Bank of Baroda M-Connect
+            "com.ubercab",                             // Uber
+            "com.hdfcbank.android.now",                // HDFC Bank (PayZapp/NOW app)
+            "com.kotak811mobilebankingapp.instantsavingsupiscanandpayrecharge", // Kotak811
+            "com.fampay.in",                           // FamPay
+            "com.nextbillion.groww",                   // Groww
+            "in.amazon.mShop.android.shopping"         // Amazon (incl. Amazon Pay)
         )
 
         /**
