@@ -5,6 +5,7 @@
 import React, { useMemo, useState } from 'react';
 import { Modal, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
 
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { groupChanges } from '../recheck';
 import type { RecheckChange } from '../recheck';
 import { theme } from '../theme';
@@ -45,7 +46,9 @@ export function RecheckModal({
 
   return (
     <Modal visible={changes != null} animationType="slide" onRequestClose={onCancel}>
-      <View style={styles.wrap}>
+      {/* A Modal is its own window: it needs its own provider for insets (status bar). */}
+      <SafeAreaProvider>
+      <SafeAreaView style={styles.wrap}>
         <Text style={styles.title}>Re-check old transactions</Text>
         <Text style={styles.sub}>
           {groups.length === 0
@@ -86,7 +89,8 @@ export function RecheckModal({
             </TouchableOpacity>
           )}
         </View>
-      </View>
+      </SafeAreaView>
+      </SafeAreaProvider>
     </Modal>
   );
 }
