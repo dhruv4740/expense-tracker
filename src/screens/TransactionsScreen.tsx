@@ -46,6 +46,7 @@ import {
   SectionHeader,
 } from '../components';
 import { theme } from '../theme';
+import { displayMerchant } from '../merchantDisplay';
 import { formatDate, groupByDay, monthRange, lastNDaysRange } from '../dates';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -81,7 +82,7 @@ const TxRow = React.memo(function TxRow({
   onLongPress: () => void;
 }) {
   const displayName =
-    item.merchant ?? item.counterparty ?? item.source ?? 'Unknown';
+    displayMerchant(item.merchant) ?? item.counterparty ?? item.source ?? 'Unknown';
   return (
     <TouchableOpacity
       style={styles.row}

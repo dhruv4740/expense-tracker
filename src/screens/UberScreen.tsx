@@ -38,6 +38,7 @@ import { DATA_CHANGED } from '../sync';
 import { AmountText, Card, EmptyState, Icon, MonthSwitcher } from '../components';
 import { monthRef } from '../components/MonthSwitcher';
 import { theme } from '../theme';
+import { displayMerchant } from '../merchantDisplay';
 import { formatDate, monthRange } from '../dates';
 
 /** Local midnight for `d` (or now). */
@@ -449,7 +450,7 @@ export default function UberScreen() {
               >
                 <View style={styles.rowMain}>
                   <Text style={styles.merchant} numberOfLines={1}>
-                    {item.merchant ?? item.counterparty ?? item.source ?? 'Uber'}
+                    {displayMerchant(item.merchant) ?? item.counterparty ?? item.source ?? 'Uber'}
                   </Text>
                   <Text style={styles.date}>
                     {formatDate(item.timestamp)}
@@ -521,7 +522,7 @@ export default function UberScreen() {
                 >
                   <View style={styles.creditMain}>
                     <Text style={styles.merchant} numberOfLines={1}>
-                      {s.candidate.counterparty ?? s.candidate.merchant ?? 'Unknown'}
+                      {s.candidate.counterparty ?? displayMerchant(s.candidate.merchant) ?? 'Unknown'}
                     </Text>
                     <Text style={styles.date}>{formatDate(s.candidate.timestamp)}</Text>
                     <Text style={styles.reason} numberOfLines={2}>

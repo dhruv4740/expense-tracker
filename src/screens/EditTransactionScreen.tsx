@@ -42,6 +42,7 @@ import { suggestPairs } from '../settle';
 import { promptMarkTransfer } from './markTransfer';
 import { CategoryChip, Icon } from '../components';
 import { theme } from '../theme';
+import { displayMerchant } from '../merchantDisplay';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -80,7 +81,7 @@ function rupees(n: number): string {
 }
 
 function whoIs(r: { counterparty?: string | null; merchant?: string | null; source?: string | null }): string {
-  return r.counterparty ?? r.merchant ?? r.source ?? 'someone';
+  return r.counterparty ?? displayMerchant(r.merchant) ?? r.source ?? 'someone';
 }
 
 // ─── Screen ──────────────────────────────────────────────────────────────────
@@ -403,7 +404,7 @@ export default function EditTransactionScreen({ route, navigation }: Props) {
         >
           <Text style={styles.headerAmount}>{rupees(parseFloat(amount) || 0)}</Text>
           <Text style={styles.headerSub} numberOfLines={1}>
-            {merchant.trim() || tx?.source || 'No merchant'} · {formatDate(timestamp)} {formatTime(timestamp)}
+            {displayMerchant(merchant) || tx?.source || 'No merchant'} · {formatDate(timestamp)} {formatTime(timestamp)}
           </Text>
         </TouchableOpacity>
       )}

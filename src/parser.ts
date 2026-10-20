@@ -379,7 +379,7 @@ function findCounterpartyPhone(body: string): string | null {
 }
 
 /** Normalises a raw merchant candidate; returns '' when nothing usable is left. */
-function cleanMerchant(candidate: string): string {
+export function cleanMerchant(candidate: string): string {
   let raw = candidate;
   // Cut at a sentence boundary: a period followed by whitespace. A period
   // inside a token ("john.doe@ybl", "Dr.Mehta", "5.00") is preserved.

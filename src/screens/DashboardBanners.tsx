@@ -30,13 +30,14 @@ import { legLabel } from '../transferPair';
 import type { TransferPair } from '../transferPair';
 import type { RepaymentBanner } from '../settle';
 import { theme } from '../theme';
+import { displayMerchant } from '../merchantDisplay';
 
 function rupees(n: number): string {
   return `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 }
 
 function who(r: { counterparty?: string | null; merchant?: string | null; source?: string | null }): string {
-  return r.counterparty ?? r.merchant ?? r.source ?? 'someone';
+  return r.counterparty ?? displayMerchant(r.merchant) ?? r.source ?? 'someone';
 }
 
 interface BannerState {

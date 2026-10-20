@@ -32,6 +32,7 @@ import { isGenericMerchantKey, normalizeMerchantKey } from '../categories';
 import { DATA_CHANGED } from '../sync';
 import { AmountText, EmptyState, SectionHeader } from '../components';
 import { theme } from '../theme';
+import { displayMerchant } from '../merchantDisplay';
 import { formatDate } from '../dates';
 
 export default function ReviewScreen() {
@@ -120,7 +121,7 @@ export default function ReviewScreen() {
           <TouchableOpacity style={styles.row} onPress={() => setSelected(item)} activeOpacity={0.7}>
             <View style={styles.rowMain}>
               <Text style={styles.merchant} numberOfLines={1}>
-                {item.merchant ?? item.counterparty ?? item.source ?? 'Unknown'}
+                {displayMerchant(item.merchant) ?? item.counterparty ?? item.source ?? 'Unknown'}
               </Text>
               <Text style={styles.date}>{formatDate(item.timestamp)}</Text>
             </View>
@@ -144,7 +145,7 @@ export default function ReviewScreen() {
             <Text style={styles.sheetTitle}>Choose a category</Text>
             {selected && (
               <Text style={styles.sheetSub} numberOfLines={1}>
-                {selected.merchant ?? selected.counterparty ?? 'Transaction'} · ₹
+                {displayMerchant(selected.merchant) ?? selected.counterparty ?? 'Transaction'} · ₹
                 {selected.amount.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
               </Text>
             )}

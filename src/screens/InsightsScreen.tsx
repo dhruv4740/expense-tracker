@@ -36,6 +36,7 @@ import {
   TrendChart,
 } from '../components';
 import { theme } from '../theme';
+import { displayMerchant } from '../merchantDisplay';
 import {
   monthRange,
   prevMonthRange,
@@ -343,7 +344,7 @@ export default function InsightsScreen() {
                 <Text style={styles.merchantIdxText}>{i + 1}</Text>
               </View>
               <Text style={styles.merchantName} numberOfLines={1}>
-                {m.merchant}
+                {displayMerchant(m.merchant)}
               </Text>
               <View style={styles.merchantRight}>
                 <Text style={styles.merchantCount}>{m.count} txn</Text>
@@ -366,7 +367,7 @@ export default function InsightsScreen() {
             {frequent.map((m, i) => (
               <View key={`freq-${m.merchant}-${i}`} style={styles.merchantRow}>
                 <Text style={styles.merchantName} numberOfLines={1}>
-                  {m.merchant}
+                  {displayMerchant(m.merchant)}
                 </Text>
                 <View style={styles.merchantRight}>
                   <Text style={styles.merchantCount}>{m.count} txn</Text>
@@ -393,7 +394,7 @@ export default function InsightsScreen() {
                   <Text style={styles.recurringTagText}>↺</Text>
                 </View>
                 <Text style={styles.merchantName} numberOfLines={1}>
-                  {r.merchant}
+                  {displayMerchant(r.merchant)}
                 </Text>
                 <View style={styles.merchantRight}>
                   <Text style={styles.merchantCount}>
