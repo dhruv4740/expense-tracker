@@ -112,15 +112,19 @@ Input: `(sender: string, body: string, ts?: number)`. Output: `ParsedTransaction
   Bills/UPI. Income defaults to `Income` instead of matching spend keywords, unless a learned
   merchant rule overrides it. Grouping for display is `groupOf()` — no DB column.
 - **`classify()` (`src/classify.ts`) is the single classifier**, used by live sync, maintenance
-  and the re-check tool so a message gets the same result whenever it is processed. Precedence:
+  and the re-check tool so a message gets the same result whenever it is processed. Precedence (self > family > friend > investment > categorize):
   1. `kind` card_bill / wallet_load / own_transfer, or `isSelfTransfer()` (counterparty matches
      the user's phone, UPI handle or account last-4 from Settings) → `type 'self'`, hidden from
      spend and income totals. Self is checked first because the user's own full name contains
      the family member names.
   2. An **income** whose merchant/counterparty matches a `family_members` entry → category
-     `Family` (letters-only compare; bank-truncated names match only with ≥8 letters).
-  3. `kind` investment → `Investment`.
-  4. Otherwise `categorize()`: learned merchant rule > keyword map.
+     `Family` (letters/digits-only compare; bank-truncated names match only with ≥8 chars).
+  3. Any row (income or expense) whose merchant/counterparty matches a `friends` entry (Settings
+     → Friends; names or VPAs, same matcher as family, stored under the `friends` settings key)
+     → `Friend Transfer`; `type` stays as parsed. Friend Transfer is in `NON_SPEND`, so friend
+     payments leave Spent / Out of pocket.
+  4. `kind` investment → `Investment`.
+  5. Otherwise `categorize()`: learned merchant rule > keyword map.
 - A card-bill or wallet-load leg is deliberately `self`: the purchases it pays for were never
   individually captured, so this is the only record — see the re-check safety rules below.
 
