@@ -2,6 +2,8 @@
 // Pure rules live in recheck.ts. In-app, user-triggered only (no background work).
 
 import { getAllMerchantRules, getTransactionById, queryTransactions, updateTransaction } from './db';
+import { AUTO_SELF_LOG_KEY } from './transferLog';
+import type { AutoSelfBatch } from './transferLog';
 import { getFamilyMembers, getIdentity, getJSON, setJSON } from './settings';
 import { refreshSyncCaches } from './sync';
 import { RECHECK_LOG_KEY, buildLog, planRecheck, planUndo } from './recheck';
@@ -10,7 +12,11 @@ import type { RecheckChange, RecheckLog } from './recheck';
 /** Plan against every stored row (including 'self'); nothing is written. */
 export function previewRecheck(): RecheckChange[] {
   const rows = queryTransactions({ includeSelf: true });
+  const protectedIds = getJSON<AutoSelfBatch[]>(AUTO_SELF_LOG_KEY, [])
+    .flatMap(b => b.entries)
+    .flatMap(e => e.prev.map(p => p.id));
   return planRecheck(rows, {
+    protectedIds,
     identity: getIdentity(),
     rules: getAllMerchantRules(),
     family: getFamilyMembers(),

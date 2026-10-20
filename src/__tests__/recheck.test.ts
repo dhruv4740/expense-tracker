@@ -93,6 +93,18 @@ describe('planRecheck', () => {
     expect(planRecheck([row({ raw_text: 'Your OTP is 123456', type: 'self' })], ctx)).toEqual([]);
   });
 
+  it('never changes a row that is already self, even when classify() would', () => {
+    // Empty identity: classify() alone would call this a plain expense.
+    expect(planRecheck([row({ type: 'self', category: 'Other' })], ctx)).toEqual([]);
+    expect(planRecheck([row({ type: 'self', category: 'zzz', amount: 100000 })], ctx)).toEqual([]);
+  });
+
+  it('never changes rows listed in protectedIds (auto-paired transfers)', () => {
+    const r = row({ category: 'zzz' });
+    expect(planRecheck([r], ctx)).toHaveLength(1);
+    expect(planRecheck([r], { ...ctx, protectedIds: [r.id as number] })).toEqual([]);
+  });
+
   it('keeps category_source auto and leaves raw_text alone in the log', () => {
     const [c] = planRecheck([row({ category: 'Shopping' })], ctx);
     const log = buildLog([c], 5);

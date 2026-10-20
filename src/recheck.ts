@@ -4,6 +4,9 @@
 // family list and reports what would change. Nothing is applied here.
 //
 // Safety rules (each has a test):
+//  - rows already type 'self' are never changed (the identity on a phone may be empty,
+//    and classify() knows nothing about pairing or manual marking), nor are rows listed
+//    in ctx.protectedIds (the auto-paired transfers log);
 //  - rows the user touched (category_source or channel 'manual') are skipped;
 //  - rows in a settles_id link, as parent or child, are skipped;
 //  - a historical card_bill / wallet_load row is never flipped to 'self': those
@@ -39,6 +42,8 @@ export interface RecheckCtx {
   identity: Identity;
   rules: Record<string, string>;
   family: string[];
+  /** Row ids never to change (e.g. rows in the auto-pairing log). */
+  protectedIds?: number[];
 }
 
 export interface RecheckChange {
@@ -82,10 +87,13 @@ export function planRecheck(rows: RecheckRow[], ctx: RecheckCtx): RecheckChange[
     }
   }
 
+  const protectedIds = new Set(ctx.protectedIds ?? []);
   const out: RecheckChange[] = [];
   for (const row of rows) {
     if (
       row.id == null ||
+      row.type === 'self' ||
+      protectedIds.has(row.id) ||
       row.category_source === 'manual' ||
       row.channel === 'manual' ||
       linked.has(row.id) ||
@@ -96,9 +104,6 @@ export function planRecheck(rows: RecheckRow[], ctx: RecheckCtx): RecheckChange[
     const parsed = parseTransaction(row.source ?? '', row.raw_text, row.timestamp);
 
     if (!parsed) {
-      if (row.type === 'self') {
-        continue; // already hidden; nothing to change
-      }
       out.push({
         id: row.id,
         row,
