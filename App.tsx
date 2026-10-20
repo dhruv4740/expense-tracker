@@ -38,6 +38,7 @@ import ReviewScreen from './src/screens/ReviewScreen';
 import MerchantRulesScreen from './src/screens/MerchantRulesScreen';
 import UberScreen from './src/screens/UberScreen';
 import FriendsDuesScreen from './src/screens/FriendsDuesScreen';
+import IposScreen from './src/screens/IposScreen';
 
 // Enable native screen containers for React Navigation (reduces overdraw and
 // improves gesture performance on Android).
@@ -56,6 +57,7 @@ export type RootStackParamList = {
   MerchantRules: undefined;
   Uber: undefined;
   FriendsDues: undefined;
+  Ipos: undefined;
 };
 
 export type RootTabParamList = {
@@ -268,6 +270,20 @@ export default function App() {
             options={{
               headerShown: true,
               title: 'Friends & dues',
+              headerStyle: { backgroundColor: theme.colors.bg },
+              headerTitleStyle: {
+                color: theme.colors.textPrimary,
+                fontWeight: theme.font.weight.semibold,
+              },
+              headerTintColor: theme.colors.accent,
+            }}
+          />
+          <Stack.Screen
+            name="Ipos"
+            component={IposScreen}
+            options={{
+              headerShown: true,
+              title: 'IPOs',
               headerStyle: { backgroundColor: theme.colors.bg },
               headerTitleStyle: {
                 color: theme.colors.textPrimary,

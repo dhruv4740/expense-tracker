@@ -43,6 +43,7 @@ import { buildLedger, totalOutstanding } from '../ledger';
 import DashboardBanners from './DashboardBanners';
 import UpcomingCard, { SafeToSpendCard } from './UpcomingCard';
 import { loadUpcoming } from '../upcomingStore';
+import { getIpoEvents } from '../ipoStore';
 import type { UpcomingItem } from '../upcoming';
 import type { BudgetStatus } from '../budgets';
 
@@ -63,6 +64,8 @@ interface DashboardData {
   duesOutstanding: number;
   /** Any split ever recorded keeps the Friends & dues row visible. */
   duesEver: boolean;
+  /** Any IPO event seen keeps the IPOs row visible. */
+  iposEver: boolean;
   /** Autopay notices + recurring payments due soon (current month only). */
   upcoming: UpcomingItem[];
 }
@@ -82,6 +85,7 @@ function loadData(offset: number): DashboardData {
     uberWaiting: getUnsettledRides(range).length,
     uberEverUsed: hasCategoryRows('Uber'),
     ...ledgerSummary(),
+    iposEver: safeIposEver(),
     upcoming: offset === 0 ? safeUpcoming() : [],
   };
 }
@@ -95,6 +99,14 @@ function safeUpcoming(): UpcomingItem[] {
     return loadUpcoming(Math.max(monthEnd, now + 7 * 86_400_000), now);
   } catch {
     return [];
+  }
+}
+
+function safeIposEver(): boolean {
+  try {
+    return getIpoEvents().length > 0;
+  } catch {
+    return false;
   }
 }
 
@@ -158,7 +170,7 @@ export default function DashboardScreen() {
     return () => sub.remove();
   }, [reload]);
 
-  const { summary, budgetStatus, uncategorizedCount, uberSummary, uberWaiting, uberEverUsed, duesOutstanding, duesEver, upcoming } = data;
+  const { summary, budgetStatus, uncategorizedCount, uberSummary, uberWaiting, uberEverUsed, duesOutstanding, duesEver, iposEver, upcoming } = data;
 
   const cats = summary.byCategory.filter(bc => bc.total > 0);
   const donutData = cats.map(bc => ({
@@ -302,6 +314,20 @@ export default function DashboardScreen() {
           <Icon name="person" size={20} color={theme.colors.accent} />
           <Text style={styles.uberText} numberOfLines={1}>
             Friends & dues · {duesOutstanding > 0 ? `${rupees(duesOutstanding)} owed to you` : 'all settled'}
+          </Text>
+          <Icon name="chevron-forward" size={16} color={theme.colors.textMuted} />
+        </TouchableOpacity>
+      )}
+
+      {iposEver && (
+        <TouchableOpacity
+          style={styles.uberRow}
+          onPress={() => navigation.navigate('Ipos')}
+          activeOpacity={0.8}
+        >
+          <Icon name="trending-up" size={20} color={theme.colors.accent} />
+          <Text style={styles.uberText} numberOfLines={1}>
+            IPOs
           </Text>
           <Icon name="chevron-forward" size={16} color={theme.colors.textMuted} />
         </TouchableOpacity>

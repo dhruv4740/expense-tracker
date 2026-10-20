@@ -220,6 +220,12 @@ Safety rules, each covered by a test:
   appended note (`[auto] not a transaction (re-check)`);
 - changed rows keep `category_source 'auto'`; `raw_text` and `dedup_key` are untouched.
 
+## 4c. IPO tracker (`src/ipo.ts`, `src/ipoStore.ts`)
+
+- IPO traffic (UPI-IPO mandate block/revoke, KFin/Link Intime/MUFG unblock, BSE/NSE application and allotment notices, HDFC Sec confirmations, CDSL credits) is **informational**: parser `NEGATIVE_GUARDS` still drop it, and sync stores it as an event in `app_settings.ipo_events` (no schema change) before parsing.
+- The ONE message that moves money is the bank's final debit on allotment. `classify()` makes an expense Investment when `isIpoDebit` matches an active issuer (name key + amount within the blocked amount). `reconcileIpoDebits()` re-tags a debit that arrived before its block notice; manual categories are never touched.
+- Events are recorded only from when this shipped; earlier IPO debits need a manual category edit.
+
 ---
 
 ## 5. Permissions & manifest

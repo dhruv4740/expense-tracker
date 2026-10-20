@@ -31,6 +31,16 @@ jest.mock('../cancelSync', () => ({
   runCancelOut: jest.fn(() => 0),
 }));
 
+jest.mock('../upcomingStore', () => ({
+  recordNotice: jest.fn(),
+}));
+
+jest.mock('../ipoStore', () => ({
+  getIpoIssuers: jest.fn(() => []),
+  recordIpoEvent: jest.fn(),
+  reconcileIpoDebits: jest.fn(() => 0),
+}));
+
 jest.mock('../settings', () => ({
   getIdentity: jest.fn(() => ({ name: '', phones: [], upiHandles: [], accountLast4: [] })),
   getFamilyMembers: jest.fn(() => []),

@@ -19,6 +19,9 @@ import { onNotificationReceived } from './native/NotificationModule';
 import { parseTransaction } from './parser';
 import { parseMandateNotice } from './upcoming';
 import { recordNotice } from './upcomingStore';
+import { parseIpoEvent } from './ipo';
+import type { IpoIssuer } from './ipo';
+import { getIpoIssuers, reconcileIpoDebits, recordIpoEvent } from './ipoStore';
 import { insertTransaction, getAllMerchantRules } from './db';
 import { runTransferPairing, snapshotMaxId } from './transferSync';
 import { runCancelOut } from './cancelSync';
@@ -45,6 +48,7 @@ let learnedRulesCache: Record<string, string> = {};
 let familyCache: string[] = [];
 let friendsCache: string[] = [];
 let amazonTopupFamilyCache = true;
+let ipoIssuersCache: IpoIssuer[] = [];
 
 /**
  * Reload identity and learned merchant rules from the DB into module-level
@@ -59,6 +63,7 @@ export function refreshSyncCaches(): void {
   familyCache = getFamilyMembers();
   friendsCache = getFriends();
   amazonTopupFamilyCache = getAmazonTopupFamily();
+  ipoIssuersCache = getIpoIssuers();
 }
 
 // ─── Core processing ──────────────────────────────────────────────────────────
@@ -94,6 +99,19 @@ function processOne(e: RawEvent): boolean {
     return false;
   }
 
+  // 0b. IPO status messages (applied / blocked / refunded / allotted) are
+  //     tracked, never counted: only the bank's final debit is money.
+  const ipo = parseIpoEvent(e.body, e.ts);
+  if (ipo) {
+    try {
+      recordIpoEvent(ipo);
+      ipoIssuersCache = getIpoIssuers();
+    } catch {
+      // Best effort; the message must still not become a transaction.
+    }
+    return false;
+  }
+
   // 1. Parse — null means the message is not a transaction.
   const parsed = parseTransaction(sender, e.body, e.ts);
   if (!parsed) {
@@ -107,6 +125,7 @@ function processOne(e: RawEvent): boolean {
     family: familyCache,
     friends: friendsCache,
     amazonTopupFamily: amazonTopupFamilyCache,
+    ipoIssuers: ipoIssuersCache,
   });
 
   // 3. Merchant fallback chain: parser merchant → counterparty → sender.
@@ -204,6 +223,11 @@ export async function syncBuffer(): Promise<number> {
     }
   } catch {
     // Native module not ready (e.g. dev fast-refresh) — buffer persists for next drain.
+  }
+  try {
+    reconcileIpoDebits();
+  } catch {
+    // Convenience pass; rows are already stored.
   }
   if (inserted > 0) {
     pairNewRows(maxIdBefore);
