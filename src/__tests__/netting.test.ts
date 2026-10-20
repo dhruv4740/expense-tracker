@@ -141,4 +141,11 @@ describe('netting: Uber screen Paid − Got back = Your share', () => {
     expect(u).toEqual({ spent: 750, reimbursed: 290, net: 460 });
     expect(u.spent - u.reimbursed).toBe(u.net);
   });
+  it('clamps Your share at 0 when credits tagged Uber exceed the rides captured', () => {
+    const over = [row(1, 'expense', 500, 'Uber'), row(2, 'income', 2262, 'Uber')];
+    const u = netUber(over, range);
+    expect(u.spent).toBe(500);
+    expect(u.reimbursed).toBe(2262);
+    expect(u.net).toBe(0);
+  });
 });

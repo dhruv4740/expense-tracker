@@ -254,8 +254,7 @@ export default function DashboardScreen() {
         >
           <Icon name="car" size={20} color={CATEGORY_META.Uber.color} />
           <Text style={styles.uberText} numberOfLines={1}>
-            Uber · {uberSummary.net < 0 ? '-' : ''}
-            {rupees(Math.abs(uberSummary.net))}
+            Uber · {rupees(uberSummary.net)}
             {uberWaiting > 0 ? ` · ${uberWaiting} waiting for repayment` : ''}
           </Text>
           <Icon name="chevron-forward" size={16} color={theme.colors.textMuted} />

@@ -71,7 +71,7 @@ export interface Summary {
 export interface UberSummary {
   spent: number;
   reimbursed: number;
-  /** spent - reimbursed. Can go negative if reimbursements exceed spend. */
+  /** max(spent - reimbursed, 0): credits tagged Uber can exceed the rides captured. */
   net: number;
   rideCount: number;
   reimbursementCount: number;
@@ -766,7 +766,7 @@ export function getUberSummary(range: Range): UberSummary {
   );
   const activeDays = Number((activeDaysRes.rows ?? [])[0]?.activeDays ?? 0);
 
-  return { spent, reimbursed, net: spent - reimbursed, rideCount, reimbursementCount, activeDays };
+  return { spent, reimbursed, net: Math.max(spent - reimbursed, 0), rideCount, reimbursementCount, activeDays };
 }
 
 /**

@@ -134,5 +134,5 @@ export function netUber(
       reimbursed += effectiveAmount(r.amount, p);
     }
   }
-  return { spent, reimbursed, net: spent - reimbursed };
+  return { spent, reimbursed, net: Math.max(spent - reimbursed, 0) };
 }

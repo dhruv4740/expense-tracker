@@ -405,6 +405,13 @@ export default function UberScreen() {
         </View>
       </Card>
 
+      {summary.reimbursed > summary.spent && (
+        <Text style={styles.overNote}>
+          Got back is more than the rides captured. Rides paid from Amazon Pay balance only show up if
+          Uber notifications are on (Settings → Apps).
+        </Text>
+      )}
+
       {waiting.length > 0 && (
         <TouchableOpacity style={styles.waitingRow} onPress={() => setOnlyWaiting(v => !v)}>
           <Text style={styles.waitingText}>
@@ -568,6 +575,12 @@ const styles = StyleSheet.create({
   totalLabel: {
     fontSize: theme.font.size.xs,
     color: theme.colors.textSecondary,
+  },
+  overNote: {
+    marginHorizontal: theme.spacing.lg,
+    marginTop: theme.spacing.sm,
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textMuted,
   },
   waitingRow: {
     flexDirection: 'row',
