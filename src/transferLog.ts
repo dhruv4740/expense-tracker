@@ -6,6 +6,7 @@
 // per sync run that auto-marked something; the last MAX_BATCHES are kept.
 
 export const AUTO_SELF_LOG_KEY = 'auto_self_log';
+export const CANCEL_DISMISSED_KEY = 'cancel_dismissed';
 export const MAX_BATCHES = 50;
 
 export interface AutoSelfEntry {
@@ -17,6 +18,9 @@ export interface AutoSelfEntry {
   basis: 'ref' | 'time' | 'near';
   /** The rows' type before we changed them, so Undo can restore it exactly. */
   prev: Array<{ id: number; type: 'expense' | 'income' | 'self' }>;
+  /** Set for cancel-out links (friend repayment ↔ spend); absent for own-transfer entries. */
+  kind?: 'cancel';
+  link?: { childId: number; parentId: number };
   seen: boolean;
   undone: boolean;
 }

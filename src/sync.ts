@@ -19,6 +19,7 @@ import { onNotificationReceived } from './native/NotificationModule';
 import { parseTransaction } from './parser';
 import { insertTransaction, getAllMerchantRules } from './db';
 import { runTransferPairing, snapshotMaxId } from './transferSync';
+import { runCancelOut } from './cancelSync';
 import { classify } from './classify';
 import type { Identity } from './identity';
 import { getIdentity, getFamilyMembers, getFriends, getAmazonTopupFamily } from './settings';
@@ -131,7 +132,9 @@ function pairNewRows(maxIdBefore: number): void {
     return;
   }
   try {
+    // Own-account transfers first, so the cancel-out pass skips rows now 'self'.
     runTransferPairing(maxIdBefore, identityCache);
+    runCancelOut(maxIdBefore, identityCache, friendsCache);
   } catch {
     // Pairing is a convenience; the rows are already safely stored.
   }

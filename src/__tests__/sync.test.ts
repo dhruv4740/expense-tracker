@@ -27,6 +27,10 @@ jest.mock('../transferSync', () => ({
   runTransferPairing: jest.fn(() => 0),
 }));
 
+jest.mock('../cancelSync', () => ({
+  runCancelOut: jest.fn(() => 0),
+}));
+
 jest.mock('../settings', () => ({
   getIdentity: jest.fn(() => ({ name: '', phones: [], upiHandles: [], accountLast4: [] })),
   getFamilyMembers: jest.fn(() => []),

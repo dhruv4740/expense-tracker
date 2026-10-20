@@ -4,6 +4,7 @@
 //  1. Auto-applied own-account transfer  — "Marked ₹X A → B as a transfer · Undo"
 //     (stays until seen/dismissed; Undo restores the rows' previous types)
 //  2. Suggested own-account transfer     — "Looks like a transfer … · Link / Not this"
+//  2b. Suggested cancel-out (friend's payment ↔ a spend; Link / Not this)
 //  3. Suggested repayment                — only high-confidence pairs (settle.isBannerWorthy)
 // No Android notifications and no background work (RULES.md §1): this runs when
 // the Dashboard is focused or data changes while the app is open.
@@ -13,7 +14,9 @@ import { DeviceEventEmitter, StyleSheet, Text, TouchableOpacity, View } from 're
 import { useFocusEffect } from '@react-navigation/native';
 
 import { setSettlement } from '../db';
-import { getIdentity } from '../settings';
+import { dismissCancel, getCancelSuggestions, linkCancel } from '../cancelSync';
+import type { CancelPair } from '../cancelOut';
+import { getFriends, getIdentity } from '../settings';
 import { DATA_CHANGED } from '../sync';
 import {
   dismissAutoApplied,
@@ -44,10 +47,11 @@ interface BannerState {
   auto: AutoSelfEntry | null;
   autoMore: number;
   suggestion: TransferPair | null;
+  cancel: CancelPair | null;
   repay: RepaymentBanner | null;
 }
 
-const EMPTY: BannerState = { auto: null, autoMore: 0, suggestion: null, repay: null };
+const EMPTY: BannerState = { auto: null, autoMore: 0, suggestion: null, cancel: null, repay: null };
 
 function load(): BannerState {
   try {
@@ -56,6 +60,7 @@ function load(): BannerState {
       auto: autos[0] ?? null,
       autoMore: Math.max(autos.length - 1, 0),
       suggestion: getTransferSuggestions(getIdentity())[0] ?? null,
+      cancel: getCancelSuggestions(getIdentity(), getFriends())[0] ?? null,
       repay: getRepaymentBanner(),
     };
   } catch {
@@ -80,17 +85,23 @@ export default function DashboardBanners() {
 
   // At most two banners, highest confidence first: auto-applied (Undo) →
   // repayment (high confidence only) → medium transfer suggestion.
-  const { auto, autoMore } = state;
-  const repay = state.repay;
-  const suggestion = auto && repay ? null : state.suggestion;
+  const { autoMore } = state;
+  let slots = 2;
+  const take = <T,>(x: T | null): T | null => (x && slots > 0 ? (slots--, x) : null);
+  const auto = take(state.auto);
+  const cancel = take(state.cancel);
+  const repay = take(state.repay);
+  const suggestion = take(state.suggestion);
 
   return (
     <>
       {auto && (
         <View style={[styles.banner, styles.autoBanner]}>
           <Text style={styles.text}>
-            Marked {rupees(auto.amount)} {auto.from} → {auto.to} as a transfer between your
-            accounts{autoMore > 0 ? ` (+${autoMore} more)` : ''}
+            {auto.kind === 'cancel'
+              ? `Linked ${rupees(auto.amount)} ${auto.from} ↔ ${auto.to}`
+              : `Marked ${rupees(auto.amount)} ${auto.from} → ${auto.to} as a transfer between your accounts`}
+            {autoMore > 0 ? ` (+${autoMore} more)` : ''}
           </Text>
           <TouchableOpacity
             onPress={() => {
@@ -107,6 +118,31 @@ export default function DashboardBanners() {
             }}
           >
             <Text style={styles.dim}>OK</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {cancel && (
+        <View style={styles.banner}>
+          <Text style={styles.text}>
+            {rupees(cancel.income.amount)} from {who(cancel.income)} may cancel out your{' '}
+            {rupees(cancel.expense.amount)} {displayMerchant(cancel.expense.merchant ?? null) ?? 'spend'}
+          </Text>
+          <TouchableOpacity
+            onPress={() => {
+              linkCancel(cancel.expense.id, cancel.income.id);
+              changed();
+            }}
+          >
+            <Text style={styles.action}>Link</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => {
+              dismissCancel(cancel.expense.id, cancel.income.id);
+              reload();
+            }}
+          >
+            <Text style={styles.dim}>Not this</Text>
           </TouchableOpacity>
         </View>
       )}

@@ -19,6 +19,7 @@ import type { Identity } from './identity';
 import { getJSON, setJSON } from './settings';
 import {
   AUTO_SELF_LOG_KEY,
+  CANCEL_DISMISSED_KEY,
   addDismissed,
   appendBatch,
   findEntry,
@@ -106,6 +107,17 @@ export function undoAutoApplied(entryId: string): void {
   const entry = findEntry(log, entryId);
   if (!entry || entry.undone) {
     return;
+  }
+  if (entry.link) {
+    // Cancel-out: unlink (only if still linked to that parent) and never re-offer the pair.
+    const { childId, parentId } = entry.link;
+    if (getTransactionById(childId)?.settles_id === parentId) {
+      updateTransaction(childId, { settles_id: null });
+    }
+    setJSON(
+      CANCEL_DISMISSED_KEY,
+      addDismissed(getJSON<string[]>(CANCEL_DISMISSED_KEY, []), `${parentId}:${childId}`),
+    );
   }
   for (const p of entry.prev) {
     if (getTransactionById(p.id)?.type === 'self') {
