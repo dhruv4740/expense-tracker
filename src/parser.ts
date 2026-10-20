@@ -92,6 +92,10 @@ const NEGATIVE_GUARDS: RegExp[] = [
   /could not|failed|declined|unsuccessful|reversed request/i,
   /\botp\b|e-?mandate|autopay.*(?:set|registered)/i,
   /requested money|has requested/i,
+  // Merchant refund notices that only announce intent (the credit is the real
+  // movement of money; "processed" / bank-credit messages are kept)
+  /refund[\s\S]{0,120}\binitiated\b/i,
+  /refund reference number/i,
   // IPO bidding, blocking and allotment traffic (the bank debit is the
   // only message that is a real movement of money)
   /UPI-IPO/i,

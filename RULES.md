@@ -226,6 +226,12 @@ Safety rules, each covered by a test:
 - The ONE message that moves money is the bank's final debit on allotment. `classify()` makes an expense Investment when `isIpoDebit` matches an active issuer (name key + amount within the blocked amount). `reconcileIpoDebits()` re-tags a debit that arrived before its block notice; manual categories are never touched.
 - Events are recorded only from when this shipped; earlier IPO debits need a manual category edit.
 
+## 4d. Refund linking (`src/refundLink.ts`, `src/refundSync.ts`)
+
+- After each sync batch, a new refund-worded income row is linked (`settles_id`) to the payment it returns: shared ≥8-digit reference, else merchant named in the refund + a spend at it within 30 days before (refund ≤ remaining amount), else a single exact-amount spend when the refund names no merchant (Kotak credits). Ambiguous = unlinked. Netting then lowers the spend and the refund leaves income totals; undo via the same log as cancel-out.
+- Merchant "refund initiated" / "refund reference number" notices are parser-guarded (the later credit is the money movement). Failed/declined payment texts are already rejected by the `failed|declined` guard.
+- Card-debit SMS carry no reference number, so Kotak card refunds rarely match by ref; history before this shipped is not back-filled.
+
 ---
 
 ## 5. Permissions & manifest

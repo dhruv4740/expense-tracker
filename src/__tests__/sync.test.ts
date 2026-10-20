@@ -31,6 +31,10 @@ jest.mock('../cancelSync', () => ({
   runCancelOut: jest.fn(() => 0),
 }));
 
+jest.mock('../refundSync', () => ({
+  runRefundLinking: jest.fn(() => 0),
+}));
+
 jest.mock('../upcomingStore', () => ({
   recordNotice: jest.fn(),
 }));
