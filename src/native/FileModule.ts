@@ -45,3 +45,33 @@ export function saveTextFile(
 export function pickTextFile(): Promise<string | null> {
   return FileModule.pickTextFile();
 }
+
+/**
+ * Let the user pick the backup folder (system folder picker). The app keeps
+ * read/write access to it across restarts.
+ *
+ * @returns  The folder's tree URI, or null if the user cancelled.
+ */
+export function pickBackupFolder(): Promise<string | null> {
+  return FileModule.pickBackupFolder();
+}
+
+/** Write a new UTF-8 file inside the picked folder. */
+export function writeToFolder(
+  treeUri: string,
+  name: string,
+  mimeType: string,
+  content: string,
+): Promise<boolean> {
+  return FileModule.writeToFolder(treeUri, name, mimeType, content);
+}
+
+/** Names of the app's own backup files in the picked folder (other files are never listed). */
+export function listBackups(treeUri: string): Promise<string[]> {
+  return FileModule.listBackups(treeUri);
+}
+
+/** Delete the named backup files from the picked folder; resolves the count deleted. */
+export function deleteBackups(treeUri: string, names: string[]): Promise<number> {
+  return FileModule.deleteBackups(treeUri, names);
+}

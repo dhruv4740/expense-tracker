@@ -232,6 +232,11 @@ Safety rules, each covered by a test:
 - Merchant "refund initiated" / "refund reference number" notices are parser-guarded (the later credit is the money movement). Failed/declined payment texts are already rejected by the `failed|declined` guard.
 - Card-debit SMS carry no reference number, so Kotak card refunds rarely match by ref; history before this shipped is not back-filled.
 
+## 4e. Weekly auto-backup (`src/autoBackup.ts`, FileModule folder methods)
+
+- The user picks a backup folder once (SAF `OpenDocumentTree`, persisted URI grant). On app open / foreground, if 7+ days have passed since the last backup, a JSON export is written there as `expense-tracker-backup-YYYY-MM-DD-HHmm.json`; the newest 8 are kept. No WorkManager/alarm/service.
+- Pruning only ever lists and deletes files whose names match that exact pattern, in that folder only (enforced in `FileModule.kt` as well as JS). A failed write is swallowed and retried on the next open.
+
 ---
 
 ## 5. Permissions & manifest

@@ -21,6 +21,7 @@ import { enableScreens } from 'react-native-screens';
 import { initDb } from './src/db';
 import { runCleanupIfNeeded } from './src/maintenance';
 import { syncBuffer, subscribeLiveEvents } from './src/sync';
+import { maybeAutoBackup } from './src/autoBackup';
 import {
   isNotificationAccessGranted,
   openNotificationAccessSettings,
@@ -183,10 +184,12 @@ export default function App() {
   // and re-drain whenever the app returns to the foreground. (RULES.md §1)
   useEffect(() => {
     syncBuffer();
+    maybeAutoBackup();
     const unsub = subscribeLiveEvents();
     const appSub = AppState.addEventListener('change', state => {
       if (state === 'active') {
         syncBuffer();
+        maybeAutoBackup();
       }
     });
     return () => {
