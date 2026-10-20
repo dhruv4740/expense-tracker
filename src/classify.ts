@@ -100,7 +100,7 @@ export function classify(
   if (ctx.friends && isFamilyMember(parsed, ctx.friends)) {
     return { category: 'Friend Transfer', type };
   }
-  if (parsed.isExpense && isIpoDebit(parsed.merchant, parsed.amount, ctx.ipoIssuers)) {
+  if (parsed.isExpense && isIpoDebit(parsed.merchant, parsed.amount, ctx.ipoIssuers, parsed.timestamp)) {
     return { category: 'Investment', type };
   }
   if (kind === 'investment') {

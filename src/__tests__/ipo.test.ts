@@ -87,4 +87,26 @@ describe('isIpoDebit', () => {
     expect(isIpoDebit('SWIGGY LIMITED', 14905, issuers)).toBe(false);
     expect(isIpoDebit(null, 14905, issuers)).toBe(false);
   });
+
+  describe('clearing-corporation debit', () => {
+    const allot = T + 3 * DAY;
+    const cl = activeIssuers([
+      { ts: T, kind: 'blocked', name: 'ACME FIRE PROTECT LIMITED', amount: 14950 },
+      { ts: allot, kind: 'allotted', name: 'ACME FIRE PROTECT LIMITED' },
+    ]);
+    it('ICCL debit inside the 7 days after allotment counts', () => {
+      expect(isIpoDebit('ICCL', 14905, cl, allot + 2 * DAY)).toBe(true);
+      expect(isIpoDebit('Indian Clearing Corporation Limited', 14905, cl, allot + 7 * DAY)).toBe(true);
+      expect(isIpoDebit('NSE Clearing', 8000, cl, allot)).toBe(true);
+    });
+    it('does not count outside the window, off-band, or without the other evidence', () => {
+      expect(isIpoDebit('ICCL', 14905, cl, allot + 7 * DAY + 1)).toBe(false);
+      expect(isIpoDebit('ICCL', 14905, cl, allot - 1)).toBe(false);
+      expect(isIpoDebit('ICCL', 14905, cl)).toBe(false); // no timestamp
+      expect(isIpoDebit('ICCL', 3000, cl, allot + DAY)).toBe(false); // < 30% of block
+      expect(isIpoDebit('ICCL', 15400, cl, allot + DAY)).toBe(false); // > 102% of block
+      expect(isIpoDebit('ICCL', 14905, issuers, allot + DAY)).toBe(false); // blocked, no allotment notice
+      expect(isIpoDebit('BSE Sports Club', 14905, cl, allot + DAY)).toBe(false); // not a clearing name
+    });
+  });
 });

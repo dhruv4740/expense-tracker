@@ -144,6 +144,8 @@ export interface IpoSummaryItem {
   /** The bank's final debit, once seen. */
   debited: number;
   lastTs: number;
+  /** Time of the latest allotment notice (0 until one is seen). */
+  allottedTs: number;
 }
 
 export interface IpoDebitRow {
@@ -177,7 +179,7 @@ export function buildIpos(events: IpoEvent[], debits: IpoDebitRow[] = []): IpoSu
     }
     let it = items.get(key);
     if (!it) {
-      it = { key, name: e.name, status: 'applied', blocked: 0, debited: 0, lastTs: e.ts };
+      it = { key, name: e.name, status: 'applied', blocked: 0, debited: 0, lastTs: e.ts, allottedTs: 0 };
       items.set(key, it);
     }
     if (e.name.length > it.name.length) {
@@ -190,6 +192,7 @@ export function buildIpos(events: IpoEvent[], debits: IpoDebitRow[] = []): IpoSu
         if (it.status === 'refunded' || it.status === 'debited') {
           it.status = 'applied';
           it.debited = 0;
+          it.allottedTs = 0;
         }
         if (e.amount) {
           it.blocked = e.amount;
@@ -199,6 +202,7 @@ export function buildIpos(events: IpoEvent[], debits: IpoDebitRow[] = []): IpoSu
         applyTs.set(key, e.ts);
         it.status = 'blocked';
         it.debited = 0;
+        it.allottedTs = 0;
         it.blocked = e.amount ?? it.blocked;
         break;
       case 'revoked':
@@ -209,6 +213,7 @@ export function buildIpos(events: IpoEvent[], debits: IpoDebitRow[] = []): IpoSu
         }
         break;
       case 'allotted':
+        it.allottedTs = e.ts;
         if (it.status !== 'debited') {
           it.status = 'allotted';
         }
@@ -236,12 +241,24 @@ export interface IpoIssuer {
   key: string;
   /** Largest amount blocked/applied for this issuer (0 if unknown). */
   blocked: number;
+  /** Time of the allotment notice, 0 if none seen yet. */
+  allottedTs: number;
 }
 
 export function activeIssuers(events: IpoEvent[]): IpoIssuer[] {
   return buildIpos(events)
     .filter(i => i.status !== 'refunded')
-    .map(i => ({ key: i.key, blocked: i.blocked }));
+    .map(i => ({ key: i.key, blocked: i.blocked, allottedTs: i.allottedTs }));
+}
+
+/** After allotment the clearing corporation's debit lands within this window. */
+export const IPO_CLEARING_WINDOW_MS = 7 * 86_400_000;
+
+const CLEARING_RE = /^(?:iccl|indian clearing corp(?:oration)?|nse clearing|nsccl|bse|nse)(?: (?:ltd|limited))?$/;
+
+/** ICCL / NSE Clearing / BSE / NSE as the debit's payee (the bank names the exchange, not the issuer). */
+export function isClearingMerchant(merchant: string | null | undefined): boolean {
+  return CLEARING_RE.test((merchant ?? '').toLowerCase().replace(/[^a-z]+/g, ' ').trim());
 }
 
 /**
@@ -249,14 +266,34 @@ export function activeIssuers(events: IpoEvent[]): IpoIssuer[] {
  * active issuer and whose amount fits inside the blocked amount (allotment
  * debits are lots × price ≤ the block). Without a known block, name alone is
  * not enough for amounts that look unlike an IPO lot.
+ *
+ * Banks often name the clearing corporation instead of the issuer. That counts
+ * only with a debit time (`ts`) and when an issuer has a known block, an
+ * allotment notice, a 30–102% amount, and the debit is within 7 days after the
+ * notice. (No listing date is parsed, so the notice time is the anchor.)
  */
 export function isIpoDebit(
   merchant: string | null | undefined,
   amount: number,
   issuers: IpoIssuer[] | undefined,
+  ts?: number,
 ): boolean {
   if (!issuers || issuers.length === 0 || !merchant) {
     return false;
+  }
+  if (isClearingMerchant(merchant)) {
+    return (
+      ts != null &&
+      issuers.some(
+        i =>
+          i.blocked > 0 &&
+          i.allottedTs > 0 &&
+          amount >= i.blocked * 0.3 &&
+          amount <= i.blocked * 1.02 &&
+          ts >= i.allottedTs &&
+          ts - i.allottedTs <= IPO_CLEARING_WINDOW_MS,
+      )
+    );
   }
   const key = ipoKey(merchant);
   if (key.length < 4) {

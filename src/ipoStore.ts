@@ -66,7 +66,7 @@ export function reconcileIpoDebits(now: number = Date.now()): number {
       r.id != null &&
       r.category !== 'Investment' &&
       r.category_source !== 'manual' &&
-      isIpoDebit(r.merchant ?? r.counterparty, r.amount, issuers)
+      isIpoDebit(r.merchant ?? r.counterparty, r.amount, issuers, r.timestamp)
     ) {
       updateTransaction(r.id, { category: 'Investment' });
       changed++;
