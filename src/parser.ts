@@ -92,6 +92,15 @@ const NEGATIVE_GUARDS: RegExp[] = [
   /could not|failed|declined|unsuccessful|reversed request/i,
   /\botp\b|e-?mandate|autopay.*(?:set|registered)/i,
   /requested money|has requested/i,
+  // The user's OWN outgoing money request ("your request for Rs.500 ... has been sent to X")
+  /your request for (?:Rs\.?|INR|₹)\s*[\d,.]+[\s\S]*?has been sent to/i,
+  // Gambling/app sign-up bonuses and bill reminders are not account movements
+  /welcome bonus|prize pool/i,
+  /pay your due amount|bill for [\s\S]{0,40}has been sent to your registered email/i,
+  // Merchant refund notices that only announce intent (the credit is the real
+  // movement of money; "processed" / bank-credit messages are kept)
+  /refund[\s\S]{0,120}\binitiated\b/i,
+  /refund reference number/i,
   // IPO bidding, blocking and allotment traffic (the bank debit is the
   // only message that is a real movement of money)
   /UPI-IPO/i,
@@ -283,6 +292,12 @@ const TEMPLATES: Template[] = [
     isExpense: false,
     merchant: () => 'Deposit interest',
   },
+  // A third party pushing money to the user's account (no "credited"/"received" word)
+  {
+    re: /^(?:This is to inform you that )?M\/s (.+?) has transferred an amount of (?:Rs\.?|INR|₹)\s*[\d,.]+ to your account/i,
+    isExpense: false,
+    merchant: m => m[1],
+  },
   // Card-bill settlements (both legs; classify treats them as transfers)
   {
     re: /credit card bill of (?:Rs\.?|INR|₹)\s*[\d,.]+ has been paid successfully/i,
@@ -298,6 +313,18 @@ const TEMPLATES: Template[] = [
   },
   {
     re: /received your payment of (?:Rs\.?|INR|₹)\s*[\d,.]+ for your/i,
+    isExpense: false,
+    merchant: () => null,
+    kind: 'card_bill',
+  },
+  {
+    re: /received payment of (?:Rs\.?|INR|₹)\s*[\d,.]+ for your \S*card/i,
+    isExpense: false,
+    merchant: () => null,
+    kind: 'card_bill',
+  },
+  {
+    re: /^(?:Hi!?\s+)?Payment of (?:Rs\.?|INR|₹)\s*[\d,.]+ received towards .*Credit Card/i,
     isExpense: false,
     merchant: () => null,
     kind: 'card_bill',
@@ -322,6 +349,35 @@ const TEMPLATES: Template[] = [
       const n = m[0].match(/account\s+\S*?\/([^.()]+?)\s+will be credited/i);
       return n ? n[1] : null;
     },
+  },
+  // slice outgoing IMPS/NEFT: "IMPS payment of Rs. X from A/c xx1 done on D to NAME is successful".
+  {
+    re: /^(?:IMPS|NEFT) payment of (?:Rs\.?|INR|₹)\s*[\d,.]+ from A\/c \S+ done on \S+ to (.+?) is successful/i,
+    isExpense: true,
+    merchant: m => m[1],
+  },
+  // UPI Lite top-ups: Lite spends send no per-payment SMS, so the top-up is the spend.
+  // ("... has failed" is rejected by the UPI LITE guard.)
+  {
+    re: /^UPI LITE Top-?up amounting to (?:Rs\.?|INR|₹)\s*[\d,.]+ has been successful/i,
+    isExpense: true,
+    merchant: () => 'UPI Lite',
+  },
+  {
+    re: /^UPI LITE is successfully enabled[\s\S]*? with Top-?Up of (?:Rs\.?|INR|₹)\s*[\d,.]+/i,
+    isExpense: true,
+    merchant: () => 'UPI Lite',
+  },
+  // Merchant receipts with no bank debit SMS of their own (gym, college portal).
+  {
+    re: /\bwe received (?:Rs\.?|INR|₹)\s*[\d,.]+ for invoice[\s\S]*?thank you (.+?)\s*\(/i,
+    isExpense: true,
+    merchant: m => m[1],
+  },
+  {
+    re: /\byour payment of (?:Rs\.?|INR|₹)\s*[\d,.]+ towards (.+?) at (.+?) has been processed successfully/i,
+    isExpense: true,
+    merchant: m => `${m[2]} ${m[1]}`,
   },
   // Fixed-deposit placement: the user's own money moving into an FD.
   {
@@ -420,6 +476,9 @@ export function cleanMerchant(candidate: string): string {
   raw = raw.replace(/^\s*(?:a\/c|account)\s*[x*\d]+\/?\s*/i, '');
   raw = raw.replace(/\s+via UPI.*$/i, '');
   raw = raw.replace(/\s+with txn ID.*$/i, '');
+  raw = raw.replace(/\s+using your .*$/i, '');
+  // "debited to HDFC Bank A/c XX3636 towards MF Utilities ... / <ref> with UMRN ...": the payee follows "towards"
+  raw = raw.replace(/^.*\btowards\s+/i, '').replace(/\s*\/\s*[A-Z0-9]{10,}.*$/i, '').replace(/\s+with$/i, '');
   raw = raw.replace(/\.?\s*UPI Ref.*$/i, '');
   raw = raw.replace(/\s+UMRN.*$/i, '');
   // The noise regex strips one tail clause per pass ("on 03/10/26 Ref 123").

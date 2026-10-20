@@ -18,6 +18,7 @@
 
 import { classify } from './classify';
 import type { Identity } from './identity';
+import type { IpoIssuer } from './ipo';
 import { parseTransaction } from './parser';
 
 export const PHANTOM_NOTE = '[auto] not a transaction (re-check)';
@@ -44,6 +45,7 @@ export interface RecheckCtx {
   family: string[];
   friends?: string[];
   amazonTopupFamily?: boolean;
+  ipoIssuers?: IpoIssuer[];
   /** Row ids never to change (e.g. rows in the auto-pairing log). */
   protectedIds?: number[];
 }

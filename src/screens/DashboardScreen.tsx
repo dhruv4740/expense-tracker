@@ -27,6 +27,7 @@ import {
   getUnsettledRides,
   hasCategoryRows,
   getUncategorizedCount,
+  getLedgerRows,
 } from '../db';
 import type { Summary, UberSummary } from '../db';
 import { CATEGORY_META, CATEGORIES } from '../categories';
@@ -38,7 +39,14 @@ import { theme } from '../theme';
 import { monthRange } from '../dates';
 import { computeBudgetStatus } from '../budgets';
 import { outOfPocket } from '../netting';
+import { buildLedger, totalOutstanding } from '../ledger';
 import DashboardBanners from './DashboardBanners';
+import UpcomingCard, { SafeToSpendCard } from './UpcomingCard';
+import { loadUpcoming } from '../upcomingStore';
+import { getIpoEvents } from '../ipoStore';
+import { loadInsights } from '../insightsStore';
+import type { Insight } from '../insights';
+import type { UpcomingItem } from '../upcoming';
 import type { BudgetStatus } from '../budgets';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -54,6 +62,16 @@ interface DashboardData {
   /** Any Uber-tagged row ever — keeps the row (the only door to the Uber
    * screen) visible in months with no rides yet. */
   uberEverUsed: boolean;
+  /** Total friends still owe you. */
+  duesOutstanding: number;
+  /** Any split ever recorded keeps the Friends & dues row visible. */
+  duesEver: boolean;
+  /** Any IPO event seen keeps the IPOs row visible. */
+  iposEver: boolean;
+  /** Autopay notices + recurring payments due soon (current month only). */
+  upcoming: UpcomingItem[];
+  /** Computed once per app open (current month only). */
+  insights: Insight[];
 }
 
 const BUDGET_WARN = 0.8;
@@ -70,7 +88,46 @@ function loadData(offset: number): DashboardData {
     uberSummary: getUberSummary(range),
     uberWaiting: getUnsettledRides(range).length,
     uberEverUsed: hasCategoryRows('Uber'),
+    ...ledgerSummary(),
+    iposEver: safeIposEver(),
+    upcoming: offset === 0 ? safeUpcoming() : [],
+    insights: offset === 0 ? safeInsights() : [],
   };
+}
+
+/** Due from today to the later of month-end and a week out; never breaks the Dashboard. */
+function safeUpcoming(): UpcomingItem[] {
+  try {
+    const now = Date.now();
+    const d = new Date(now);
+    const monthEnd = new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime() - 1;
+    return loadUpcoming(Math.max(monthEnd, now + 7 * 86_400_000), now);
+  } catch {
+    return [];
+  }
+}
+
+function safeInsights(): Insight[] {
+  try {
+    return loadInsights();
+  } catch {
+    return [];
+  }
+}
+
+function safeIposEver(): boolean {
+  try {
+    return getIpoEvents().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function ledgerSummary(): { duesOutstanding: number; duesEver: boolean } {
+  const ledger = buildLedger(
+    getLedgerRows().filter(r => r.id != null).map(r => ({ ...r, id: r.id as number })),
+  );
+  return { duesOutstanding: totalOutstanding(ledger), duesEver: ledger.length > 0 };
 }
 
 function rupees(n: number): string {
@@ -126,7 +183,7 @@ export default function DashboardScreen() {
     return () => sub.remove();
   }, [reload]);
 
-  const { summary, budgetStatus, uncategorizedCount, uberSummary, uberWaiting, uberEverUsed } = data;
+  const { summary, budgetStatus, uncategorizedCount, uberSummary, uberWaiting, uberEverUsed, duesOutstanding, duesEver, iposEver, upcoming, insights } = data;
 
   const cats = summary.byCategory.filter(bc => bc.total > 0);
   const donutData = cats.map(bc => ({
@@ -259,6 +316,64 @@ export default function DashboardScreen() {
           </Text>
           <Icon name="chevron-forward" size={16} color={theme.colors.textMuted} />
         </TouchableOpacity>
+      )}
+
+      {duesEver && (
+        <TouchableOpacity
+          style={styles.uberRow}
+          onPress={() => navigation.navigate('FriendsDues')}
+          activeOpacity={0.8}
+        >
+          <Icon name="person" size={20} color={theme.colors.accent} />
+          <Text style={styles.uberText} numberOfLines={1}>
+            Friends & dues · {duesOutstanding > 0 ? `${rupees(duesOutstanding)} owed to you` : 'all settled'}
+          </Text>
+          <Icon name="chevron-forward" size={16} color={theme.colors.textMuted} />
+        </TouchableOpacity>
+      )}
+
+      {iposEver && (
+        <TouchableOpacity
+          style={styles.uberRow}
+          onPress={() => navigation.navigate('Ipos')}
+          activeOpacity={0.8}
+        >
+          <Icon name="trending-up" size={20} color={theme.colors.accent} />
+          <Text style={styles.uberText} numberOfLines={1}>
+            IPOs
+          </Text>
+          <Icon name="chevron-forward" size={16} color={theme.colors.textMuted} />
+        </TouchableOpacity>
+      )}
+
+      {offset === 0 && (
+        <SafeToSpendCard
+          fromFamily={summary.fromFamily}
+          earned={summary.earned}
+          spent={summary.spent}
+          items={upcoming}
+          now={Date.now()}
+        />
+      )}
+      <UpcomingCard items={upcoming} now={Date.now()} />
+
+      {insights.length > 0 && (
+        <>
+          <SectionHeader title="Insights" />
+          {insights.map(i => (
+            <View key={i.id} style={styles.insightCard}>
+              <Icon
+                name={i.tone === 'up' ? 'arrow-up' : i.tone === 'down' ? 'arrow-down' : 'stats'}
+                size={20}
+                color={i.tone === 'up' ? theme.colors.warning : theme.colors.accent}
+              />
+              <View style={styles.insightMain}>
+                <Text style={styles.insightTitle}>{i.title}</Text>
+                <Text style={styles.insightDetail}>{i.detail}</Text>
+              </View>
+            </View>
+          ))}
+        </>
       )}
 
       {/* ── Budgets at ≥80% ── */}
@@ -422,6 +537,23 @@ const styles = StyleSheet.create({
     fontSize: theme.font.size.sm,
     color: theme.colors.textPrimary,
   },
+  insightCard: {
+    marginHorizontal: theme.spacing.lg,
+    marginBottom: theme.spacing.sm,
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+  },
+  insightMain: { flex: 1, gap: 2 },
+  insightTitle: {
+    fontSize: theme.font.size.md,
+    fontWeight: theme.font.weight.semibold,
+    color: theme.colors.textPrimary,
+  },
+  insightDetail: { fontSize: theme.font.size.xs, color: theme.colors.textMuted },
   budgetCard: {
     marginTop: theme.spacing.lg,
   },

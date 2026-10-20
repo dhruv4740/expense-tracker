@@ -33,6 +33,9 @@ import {
 } from '../db';
 import type { TransactionRow, UberSummary, UnsettledRide } from '../db';
 import { splitOwed, suggestSettlements } from '../settle';
+import { PRESET_LABEL, presetOwed } from '../ledger';
+import type { SplitPreset } from '../ledger';
+import { getFriends } from '../settings';
 import type { CandidateTx, Suggestion } from '../settle';
 import { DATA_CHANGED } from '../sync';
 import { AmountText, Card, EmptyState, Icon, MonthSwitcher } from '../components';
@@ -312,6 +315,9 @@ export default function UberScreen() {
   const [onlyWaiting, setOnlyWaiting] = useState(false);
   const [splitFor, setSplitFor] = useState<number | null>(null);
   const [customN, setCustomN] = useState('');
+  const [customAmt, setCustomAmt] = useState('');
+  const [splitFriend, setSplitFriend] = useState('');
+  const friendNames = useMemo(() => getFriends().slice(0, 6), []);
   const [repayFor, setRepayFor] = useState<UnsettledRide | null>(null);
   const [showManual, setShowManual] = useState(false);
 
@@ -328,20 +334,49 @@ export default function UberScreen() {
   const rows = onlyWaiting ? monthRows.filter(r => r.id != null && waitingIds.has(r.id)) : monthRows;
 
   // One tap: n people → friends owe (n-1)/n of the fare.
-  const applySplit = useCallback((item: TransactionRow, n: number | null) => {
-    if (item.id == null) {
-      return;
-    }
-    const owed = n != null && n >= 2 ? splitOwed(item.amount, n) : null;
-    const fields: Partial<TransactionRow> = { owed_amount: owed };
-    if (owed != null && !item.note) {
-      fields.note = `Split ₹${fmt(item.amount)} ÷ ${n} — your share`;
-    }
-    updateTransaction(item.id, fields);
-    setSplitFor(null);
-    setCustomN('');
-    DeviceEventEmitter.emit(DATA_CHANGED);
-  }, []);
+  const saveOwed = useCallback(
+    (item: TransactionRow, owed: number | null, label: string) => {
+      if (item.id == null) {
+        return;
+      }
+      const friend = splitFriend.trim();
+      const fields: Partial<TransactionRow> = {
+        owed_amount: owed,
+        owed_friend: owed != null && friend ? friend : null,
+      };
+      if (owed != null && !item.note) {
+        fields.note = `Split ₹${fmt(item.amount)} ${label} — your share`;
+      }
+      updateTransaction(item.id, fields);
+      setSplitFor(null);
+      setCustomN('');
+      setCustomAmt('');
+      DeviceEventEmitter.emit(DATA_CHANGED);
+    },
+    [splitFriend],
+  );
+
+  const applySplit = useCallback(
+    (item: TransactionRow, n: number | null) =>
+      saveOwed(item, n != null && n >= 2 ? splitOwed(item.amount, n) : null, `÷ ${n}`),
+    [saveOwed],
+  );
+
+  const applyPreset = useCallback(
+    (item: TransactionRow, preset: SplitPreset) =>
+      saveOwed(item, presetOwed(item.amount, preset), `(friend owes ${PRESET_LABEL[preset]})`),
+    [saveOwed],
+  );
+
+  const applyCustom = useCallback(
+    (item: TransactionRow) => {
+      const v = parseFloat(customAmt);
+      if (v > 0 && v < item.amount) {
+        saveOwed(item, Math.round(v * 100) / 100, `(friend owes ₹${fmt(v)})`);
+      }
+    },
+    [customAmt, saveOwed],
+  );
 
   // Ranked suggestions for the ride being settled (same scorer as before).
   const repaySuggestions = useMemo(() => {
@@ -469,7 +504,42 @@ export default function UberScreen() {
               {isRide && (
                 <View style={styles.rowActions}>
                   {open ? (
-                    <>
+                    <View style={styles.splitBlock}>
+                      <View style={styles.splitLine}>
+                        <TextInput
+                          style={[styles.customInput, styles.friendInput]}
+                          value={splitFriend}
+                          onChangeText={setSplitFriend}
+                          placeholder="Friend (optional)"
+                          placeholderTextColor={theme.colors.textMuted}
+                        />
+                        {friendNames.map(f => (
+                          <TouchableOpacity key={f} style={styles.chip} onPress={() => setSplitFriend(f)}>
+                            <Text style={styles.chipText}>{f.split(' ')[0]}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                      <View style={styles.splitLine}>
+                      <Text style={styles.date}>Owes</Text>
+                      {(['half', 'third', 'twoThirds'] as SplitPreset[]).map(pr => (
+                        <TouchableOpacity key={pr} style={styles.chip} onPress={() => applyPreset(item, pr)}>
+                          <Text style={styles.chipText}>{PRESET_LABEL[pr]}</Text>
+                        </TouchableOpacity>
+                      ))}
+                      <TextInput
+                        style={[styles.customInput, styles.amtInput]}
+                        value={customAmt}
+                        onChangeText={setCustomAmt}
+                        keyboardType="decimal-pad"
+                        placeholder="₹ custom"
+                        placeholderTextColor={theme.colors.textMuted}
+                        onSubmitEditing={() => applyCustom(item)}
+                      />
+                      <TouchableOpacity style={styles.chip} onPress={() => applyCustom(item)}>
+                        <Text style={styles.chipText}>Set</Text>
+                      </TouchableOpacity>
+                      </View>
+                      <View style={styles.splitLine}>
                       {[2, 3, 4].map(n => (
                         <TouchableOpacity key={n} style={styles.chip} onPress={() => applySplit(item, n)}>
                           <Text style={styles.chipText}>÷{n}</Text>
@@ -490,7 +560,8 @@ export default function UberScreen() {
                           <Text style={styles.chipText}>Clear</Text>
                         </TouchableOpacity>
                       ) : null}
-                    </>
+                      </View>
+                    </View>
                   ) : (
                     <TouchableOpacity onPress={() => setSplitFor(item.id ?? null)}>
                       <Text style={styles.adjustLink}>{item.owed_amount ? 'Change split' : 'Split'}</Text>
@@ -628,6 +699,15 @@ const styles = StyleSheet.create({
     color: theme.colors.accent,
     fontWeight: theme.font.weight.semibold,
   },
+  splitBlock: { gap: theme.spacing.sm },
+  splitLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: theme.spacing.sm,
+  },
+  friendInput: { width: 130, textAlign: 'left' },
+  amtInput: { width: 72 },
   customInput: {
     width: 44,
     paddingVertical: 2,

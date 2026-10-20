@@ -58,6 +58,8 @@ import {
 } from '../native/NotificationModule';
 import type { InstalledApp } from '../native/NotificationModule';
 import { exportCsv, exportJson, restoreFromJson } from '../export';
+import { backupNow, folderLabel, getBackupFolder, getLastBackupTs, setBackupFolder } from '../autoBackup';
+import { pickBackupFolder } from '../native/FileModule';
 import { Card, SectionHeader, Icon } from '../components';
 import { theme } from '../theme';
 import { RecheckModal } from './RecheckModal';
@@ -182,6 +184,9 @@ export default function SettingsScreen() {
   // ── Data buttons ────────────────────────────────────────────────────────────
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [backupFolder, setBackupFolderState] = useState<string | null>(() => getBackupFolder());
+  const [lastBackup, setLastBackup] = useState<number | null>(() => getLastBackupTs());
+  const [backingUp, setBackingUp] = useState(false);
   const [recheck, setRecheck] = useState<RecheckChange[] | null>(null);
   const [hasRecheckLog, setHasRecheckLog] = useState(() => getRecheckLog() != null);
   const finishRecheck = (msg: string) => {
@@ -415,6 +420,31 @@ export default function SettingsScreen() {
       Alert.alert(ok ? 'Exported' : 'Export failed', ok ? 'JSON saved.' : 'Could not save JSON.');
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function handlePickBackupFolder() {
+    try {
+      const uri = await pickBackupFolder();
+      if (uri) {
+        setBackupFolder(uri);
+        setBackupFolderState(uri);
+      }
+    } catch (e) {
+      Alert.alert('Folder not set', e instanceof Error ? e.message : 'Could not pick a folder.');
+    }
+  }
+
+  async function handleBackupNow() {
+    setBackingUp(true);
+    try {
+      await backupNow();
+      setLastBackup(getLastBackupTs());
+      Alert.alert('Backed up', 'Backup saved to the chosen folder.');
+    } catch (e) {
+      Alert.alert('Backup failed', e instanceof Error ? e.message : 'Could not write the backup.');
+    } finally {
+      setBackingUp(false);
     }
   }
 
@@ -879,6 +909,32 @@ export default function SettingsScreen() {
           )}
           <Text style={styles.dataBtnText}>Restore from JSON</Text>
         </TouchableOpacity>
+        <TouchableOpacity style={styles.dataBtn} onPress={handlePickBackupFolder}>
+          <Icon name="download" size={18} color={theme.colors.accent} />
+          <Text style={styles.dataBtnText}>
+            {backupFolder ? 'Change backup folder' : 'Pick weekly backup folder'}
+          </Text>
+        </TouchableOpacity>
+        {backupFolder ? (
+          <>
+            <Text style={styles.backupHint}>
+              Folder: {folderLabel(backupFolder)} · last backup:{' '}
+              {lastBackup ? new Date(lastBackup).toLocaleString('en-IN') : 'never'}. Backs up when you open the app, at most weekly; keeps the newest 8.
+            </Text>
+            <TouchableOpacity
+              style={[styles.dataBtn, backingUp ? styles.dataBtnDisabled : undefined]}
+              onPress={handleBackupNow}
+              disabled={backingUp}
+            >
+              {backingUp ? (
+                <ActivityIndicator size="small" color={theme.colors.accent} />
+              ) : (
+                <Icon name="download" size={18} color={theme.colors.accent} />
+              )}
+              <Text style={styles.dataBtnText}>Back up now</Text>
+            </TouchableOpacity>
+          </>
+        ) : null}
       </Card>
 
       {/* ── About ── */}
@@ -1118,6 +1174,11 @@ const styles = StyleSheet.create({
   },
   dataBtnDisabled: {
     opacity: 0.5,
+  },
+  backupHint: {
+    fontSize: theme.font.size.xs,
+    color: theme.colors.textMuted,
+    marginVertical: theme.spacing.xs,
   },
   dataBtnText: {
     fontSize: theme.font.size.md,

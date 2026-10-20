@@ -281,4 +281,59 @@ describe('parseTransaction', () => {
     expect(result!.merchant).not.toBe('10');
     expect(result!.merchant!.toUpperCase()).toContain('SWIGGY');
   });
+
+  // ── Corpus-audit regressions ─────────────────────────────────────────────
+  it('ignores the user own outgoing money request', () => {
+    const body = 'Hi Test, your request for Rs.500.00 through user@idfcbank has been sent to friend@okhdfcbank using your UPI app. We will keep you updated on this. Team IDFC FIRST Bank';
+    expect(parseTransaction('JX-IDFCFB', body, Date.now())).toBeNull();
+  });
+
+  it('ignores sign-up bonus promos and bill-due reminders', () => {
+    expect(parseTransaction('AD-APP', 'Dear, Rs.1500 Welcome Bonus credited to ABC account. IND vs PAK T20 Match. Prize Pool - Rs.2,57,00,000', Date.now())).toBeNull();
+    expect(
+      parseTransaction('ViCARE', 'Hi! Your Jul bill for Vi Postpaid no. 98XXXX10 has been sent to your registered email ID - a@b.com. Due date is 10 days from the bill date. Please pay your due amount, Rs 588.82 by the due date 07/08', Date.now()),
+    ).toBeNull();
+  });
+
+  it('treats card-bill payment confirmations as card_bill, not income', () => {
+    const a = parseTransaction('AD-UTKSPR-S', 'We have received payment of INR 103.95 for your SuperCard ending 1234. Your available limit is now INR 15,300.00 -Utkarsh SFBL', Date.now());
+    expect(a).toMatchObject({ amount: 103.95, isExpense: false, kind: 'card_bill' });
+    const b = parseTransaction('VM-KOTAKB-S', 'Hi! Payment of INR 130 received towards Kotak Bank Credit Card x1234 via auto-debit on 10-Mar-2026 and will be posted to your card account by end of day.', Date.now());
+    expect(b).toMatchObject({ amount: 130, isExpense: false, kind: 'card_bill' });
+  });
+
+  it('does not keep the trailing "using your ... UPI" clause in the merchant', () => {
+    const r = parseTransaction('VM-IDFCFB', 'Hi, you have sent Rs.35.00 from user@idfcbank to shop@paytm using your IDFC FIRST Bank UPI.Txn ID-304834505695.', Date.now());
+    expect(r!.merchant).toBe('shop@paytm');
+  });
+
+  it('takes the payee after "towards" in an MF Utilities debit', () => {
+    const r = parseTransaction('VM-HDFCBK-S', 'INR 2500.00 debited to HDFC Bank A/C No XXXXXXXXXX1234 towards MF Utilities India Pvt Ltd / 17210233051171D04B95  with UMRN HDFC7011507246002816', Date.now());
+    expect(r!.merchant).toBe('MF Utilities India Pvt Ltd');
+  });
+
+  it('parses "M/s X has transferred an amount of Rs. N to your account" as income', () => {
+    const r = parseTransaction('VM-YESBNK', 'This is to inform you that M/s ACME TRADERS has transferred an amount of Rs. 200.00 to your account no. XXXXXXXX1234 from their YES Bank account through RTGS/NEFT/IMPS', Date.now());
+    expect(r).toMatchObject({ amount: 200, isExpense: false, merchant: 'ACME TRADERS' });
+  });
+
+  it('parses slice outgoing IMPS as an expense to the named payee', () => {
+    const r = parseTransaction('VM-SLCBNK-T', 'IMPS payment of Rs. 2,97,627 from A/c xx3333 done on 18-Aug-26 to ANITA RAO is successful (Ref ID: 624253159132). Not you? Call 08048329999 - slice', Date.now());
+    expect(r).toMatchObject({ amount: 297627, isExpense: true, merchant: 'ANITA RAO' });
+  });
+
+  it('treats a UPI Lite top-up as the spend; a failed top-up is rejected', () => {
+    const ok = parseTransaction('AD-HDFCBK-S', 'UPI LITE Top-up amounting to Rs.2000.00 has been successful. Ref No 121282891840 - HDFC Bank', Date.now());
+    expect(ok).toMatchObject({ amount: 2000, isExpense: true, merchant: 'UPI Lite' });
+    const en = parseTransaction('AD-HDFCBK-S', 'UPI LITE is successfully enabled  for A/C no **1234 with Top-Up of Rs.500.00  on 07-02-26 Ref No 183791062365. - HDFC Bank', Date.now());
+    expect(en).toMatchObject({ amount: 500, isExpense: true, merchant: 'UPI Lite' });
+    expect(parseTransaction('AD-HDFCBK-S', 'UPI LITE Top-up amounting to Rs.500.00 has failed. Please try again. Ref No 121282891840 - HDFC Bank', Date.now())).toBeNull();
+  });
+
+  it('parses a gym invoice receipt and a college-portal payment as expenses', () => {
+    const g = parseTransaction('AD-FYTRAK-S', 'Dear Anita Rao , we received Rs. 16000 for invoice 58015275, now pending amount is Rs. 0, thank you Gravity Fitness ( Hiranandani Estate ). FYTRACK', Date.now());
+    expect(g).toMatchObject({ amount: 16000, isExpense: true, merchant: 'Gravity Fitness' });
+    const e = parseTransaction('CP-DGTEDU', 'ANITA, your payment of Rs 2520.00 towards admission-form at SPIT has been processed successfully (via DigitalEdu)', Date.now());
+    expect(e).toMatchObject({ amount: 2520, isExpense: true, merchant: 'SPIT admission-form' });
+  });
 });

@@ -226,3 +226,21 @@ describe('findMatchingLeg', () => {
     expect(findMatchingLeg(c, [d])?.id).toBe(d.id);
   });
 });
+
+describe('slice IMPS debit pairs with the receiving bank credit by reference', () => {
+  it('is a high-confidence ref pair', () => {
+    const d = debit({
+      amount: 297627,
+      source: 'VM-SLCBNK-T',
+      raw_text: 'IMPS payment of Rs. 2,97,627 from A/c xx2222 done on 18-Aug-26 to TEST USER is successful (Ref ID: 624253159132). Not you? Call 08048329999 - slice',
+    });
+    const c = credit({
+      amount: 297627,
+      timestamp: T + 20_000,
+      raw_text: 'Your account XXXXXXX1111 is credited by Rs.297627 on 18-08-26 received from account XXXXXXX2222/TEST USER (IMPS Ref no. 624253159132). Call 18602677777 to report issue-Bank',
+    });
+    const pairs = findTransferPairs([d, c], [d, c], identity);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0]).toMatchObject({ confidence: 'high', basis: 'ref' });
+  });
+});

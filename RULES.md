@@ -143,7 +143,7 @@ Input: `(sender: string, body: string, ts?: number)`. Output: `ParsedTransaction
 ## 4. DB rules (`src/db.ts`, op-sqlite)
 - Library: `@op-engineering/op-sqlite` (replaces deprecated `react-native-quick-sqlite`; New-Arch ready).
 - One connection, opened once; enable **WAL** (`PRAGMA journal_mode=WAL`).
-- Migrations are linear and gated by `PRAGMA user_version` (currently v4) — every step is
+- Migrations are linear and gated by `PRAGMA user_version` (currently v5) — every step is
   `ALTER TABLE ... ADD COLUMN` or `CREATE TABLE IF NOT EXISTS`, never a rebuild/DROP/UPDATE of
   existing rows. This is a hard rule, not just current practice: existing installs carry real
   transaction history that must survive every update untouched.
@@ -164,6 +164,7 @@ Input: `(sender: string, body: string, ts?: number)`. Output: `ParsedTransaction
     channel          TEXT,                                  -- v3 ('sms' | 'notification' | 'manual' | NULL)
     settles_id       INTEGER,                               -- v4 (this row settles row N)
     owed_amount      REAL,                                  -- v4 (split ride: amount friends owe)
+    owed_friend      TEXT,                                  -- v5 (who owes owed_amount; NULL = not assigned)
     dedup_key        TEXT UNIQUE
   );
   CREATE INDEX IF NOT EXISTS idx_tx_timestamp ON transactions(timestamp);
@@ -184,6 +185,7 @@ Input: `(sender: string, body: string, ts?: number)`. Output: `ParsedTransaction
   repayment"); it never changes totals. `getSummary` also returns `fromFamily` (Family-category
   income) and `earned` (= received − fromFamily). Uber screen invariant: Paid − Got back = Your
   share, equal to the Uber row on the Dashboard.
+- **Friends & dues (v5).** `ledger.ts` groups split rows by `owed_friend`; a friend's balance = Σ `owed_amount` − opposite-direction `settles_id` children (clamped per split row, so an over-payment never goes negative). Cancel-out "share" links count as repayments. Rows with no friend show as "Not assigned". The screen reads `getLedgerRows()` on focus only.
 - **Strict idempotency:** `dedup_key = hash(source + amount + floor(ts/60000) + raw_text)`; insert with `INSERT OR IGNORE`. Prevents live-emit + buffer-drain double counts of the exact same message. Unaffected by the soft-dedup rule below — always applies.
 - **Soft cross-channel dedup** (user-chosen policy — see §8 for why "cross-channel only"): the same payment can arrive via SMS *and* a bank-app notification with different raw text (different strict key). An incoming row is dropped only when an *existing* row has a **known, different** channel (same-channel repeats are always kept), amount matches, timestamps are within 2 minutes, and counterparties agree or are unknown. Every pre-v3 row has `channel = NULL` and is exempt — NULL never triggers a drop. Manual entries (`channel = 'manual'`) never soft-dedup. Restore (`export.ts`) bypasses soft dedup entirely (`skipSoftDedup: true`) so it can't merge two genuine close-together payments; the strict key still keeps a restore idempotent.
 - API: `initDb()`, `insertTransaction(tx, options?)`, `insertManual(tx)`, `getAll()`, `queryTransactions(filters)`, `getSummary(range)` (spent/received/net + per-local-day and per-category breakdowns). No dead `getByDateRange`/`getMonthlySummary`/`getTrend` — removed, use `queryTransactions`/`getSummary`.
@@ -217,6 +219,23 @@ Safety rules, each covered by a test:
 - a row the parser now rejects (phantom) is **never deleted**: it becomes `self` with an
   appended note (`[auto] not a transaction (re-check)`);
 - changed rows keep `category_source 'auto'`; `raw_text` and `dedup_key` are untouched.
+
+## 4c. IPO tracker (`src/ipo.ts`, `src/ipoStore.ts`)
+
+- IPO traffic (UPI-IPO mandate block/revoke, KFin/Link Intime/MUFG unblock, BSE/NSE application and allotment notices, HDFC Sec confirmations, CDSL credits) is **informational**: parser `NEGATIVE_GUARDS` still drop it, and sync stores it as an event in `app_settings.ipo_events` (no schema change) before parsing.
+- The ONE message that moves money is the bank's final debit on allotment. `classify()` makes an expense Investment when `isIpoDebit` matches an active issuer (name key + amount within the blocked amount). `reconcileIpoDebits()` re-tags a debit that arrived before its block notice; manual categories are never touched.
+- Events are recorded only from when this shipped; earlier IPO debits need a manual category edit.
+
+## 4d. Refund linking (`src/refundLink.ts`, `src/refundSync.ts`)
+
+- After each sync batch, a new refund-worded income row is linked (`settles_id`) to the payment it returns: shared ≥8-digit reference, else merchant named in the refund + a spend at it within 30 days before (refund ≤ remaining amount), else a single exact-amount spend when the refund names no merchant (Kotak credits). Ambiguous = unlinked. Netting then lowers the spend and the refund leaves income totals; undo via the same log as cancel-out.
+- Merchant "refund initiated" / "refund reference number" notices are parser-guarded (the later credit is the money movement). Failed/declined payment texts are already rejected by the `failed|declined` guard.
+- Card-debit SMS carry no reference number, so Kotak card refunds rarely match by ref; history before this shipped is not back-filled.
+
+## 4e. Weekly auto-backup (`src/autoBackup.ts`, FileModule folder methods)
+
+- The user picks a backup folder once (SAF `OpenDocumentTree`, persisted URI grant). On app open / foreground, if 7+ days have passed since the last backup, a JSON export is written there as `expense-tracker-backup-YYYY-MM-DD-HHmm.json`; the newest 8 are kept. No WorkManager/alarm/service.
+- Pruning only ever lists and deletes files whose names match that exact pattern, in that folder only (enforced in `FileModule.kt` as well as JS). A failed write is swallowed and retried on the next open.
 
 ---
 

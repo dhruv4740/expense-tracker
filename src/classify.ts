@@ -9,6 +9,8 @@ import type { Category } from './categories';
 import { isSelfTransfer } from './identity';
 import type { Identity } from './identity';
 import type { ParsedTransaction } from './parser';
+import { isIpoDebit } from './ipo';
+import type { IpoIssuer } from './ipo';
 
 export interface ClassifyContext {
   identity: Identity;
@@ -20,6 +22,8 @@ export interface ClassifyContext {
   friends?: string[];
   /** Amazon Pay wallet top-ups are family money (default true when omitted). */
   amazonTopupFamily?: boolean;
+  /** IPOs with money blocked/allotted: their final bank debit is Investment. */
+  ipoIssuers?: IpoIssuer[];
 }
 
 export interface Classification {
@@ -95,6 +99,9 @@ export function classify(
   // Friends: both directions; type stays as parsed. Family wins over friend.
   if (ctx.friends && isFamilyMember(parsed, ctx.friends)) {
     return { category: 'Friend Transfer', type };
+  }
+  if (parsed.isExpense && isIpoDebit(parsed.merchant, parsed.amount, ctx.ipoIssuers, parsed.timestamp)) {
+    return { category: 'Investment', type };
   }
   if (kind === 'investment') {
     return { category: 'Investment', type };

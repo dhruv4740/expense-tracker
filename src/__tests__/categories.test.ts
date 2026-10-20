@@ -141,6 +141,12 @@ describe('categorize — keyword matching', () => {
     expect(categorize('Swiggy', 'Rs.200 debited at Swiggy', null, noRules)).toBe('Food');
   });
 
+  it('categorizes gym, college admission and UPI Lite receipts', () => {
+    expect(categorize('Gravity Fitness', 'we received Rs. 16000 for invoice 1', null, noRules)).toBe('Health');
+    expect(categorize('SPIT admission-form', 'your payment of Rs 2520.00 towards admission-form at SPIT', null, noRules)).toBe('Education');
+    expect(categorize('UPI Lite', 'UPI LITE Top-up amounting to Rs.500.00 has been successful.', null, noRules)).toBe('UPI');
+  });
+
   it('categorizes Zomato → Food', () => {
     expect(categorize('Zomato', 'Rs.300 sent to Zomato', null, noRules)).toBe('Food');
   });

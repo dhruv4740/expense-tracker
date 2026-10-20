@@ -6,6 +6,7 @@ import { AUTO_SELF_LOG_KEY } from './transferLog';
 import type { AutoSelfBatch } from './transferLog';
 import { getAmazonTopupFamily, getFamilyMembers, getFriends, getIdentity, getJSON, setJSON } from './settings';
 import { refreshSyncCaches } from './sync';
+import { getIpoIssuers } from './ipoStore';
 import { RECHECK_LOG_KEY, buildLog, planRecheck, planUndo } from './recheck';
 import type { RecheckChange, RecheckLog } from './recheck';
 
@@ -22,6 +23,7 @@ export function previewRecheck(): RecheckChange[] {
     family: getFamilyMembers(),
     friends: getFriends(),
     amazonTopupFamily: getAmazonTopupFamily(),
+    ipoIssuers: getIpoIssuers(),
   });
 }
 

@@ -21,6 +21,7 @@ import { enableScreens } from 'react-native-screens';
 import { initDb } from './src/db';
 import { runCleanupIfNeeded } from './src/maintenance';
 import { syncBuffer, subscribeLiveEvents } from './src/sync';
+import { maybeAutoBackup } from './src/autoBackup';
 import {
   isNotificationAccessGranted,
   openNotificationAccessSettings,
@@ -37,6 +38,8 @@ import EditTransactionScreen from './src/screens/EditTransactionScreen';
 import ReviewScreen from './src/screens/ReviewScreen';
 import MerchantRulesScreen from './src/screens/MerchantRulesScreen';
 import UberScreen from './src/screens/UberScreen';
+import FriendsDuesScreen from './src/screens/FriendsDuesScreen';
+import IposScreen from './src/screens/IposScreen';
 
 // Enable native screen containers for React Navigation (reduces overdraw and
 // improves gesture performance on Android).
@@ -54,6 +57,8 @@ export type RootStackParamList = {
   Review: undefined;
   MerchantRules: undefined;
   Uber: undefined;
+  FriendsDues: undefined;
+  Ipos: undefined;
 };
 
 export type RootTabParamList = {
@@ -179,10 +184,12 @@ export default function App() {
   // and re-drain whenever the app returns to the foreground. (RULES.md §1)
   useEffect(() => {
     syncBuffer();
+    maybeAutoBackup();
     const unsub = subscribeLiveEvents();
     const appSub = AppState.addEventListener('change', state => {
       if (state === 'active') {
         syncBuffer();
+        maybeAutoBackup();
       }
     });
     return () => {
@@ -252,6 +259,34 @@ export default function App() {
             options={{
               headerShown: true,
               title: 'Uber Expenses',
+              headerStyle: { backgroundColor: theme.colors.bg },
+              headerTitleStyle: {
+                color: theme.colors.textPrimary,
+                fontWeight: theme.font.weight.semibold,
+              },
+              headerTintColor: theme.colors.accent,
+            }}
+          />
+          <Stack.Screen
+            name="FriendsDues"
+            component={FriendsDuesScreen}
+            options={{
+              headerShown: true,
+              title: 'Friends & dues',
+              headerStyle: { backgroundColor: theme.colors.bg },
+              headerTitleStyle: {
+                color: theme.colors.textPrimary,
+                fontWeight: theme.font.weight.semibold,
+              },
+              headerTintColor: theme.colors.accent,
+            }}
+          />
+          <Stack.Screen
+            name="Ipos"
+            component={IposScreen}
+            options={{
+              headerShown: true,
+              title: 'IPOs',
               headerStyle: { backgroundColor: theme.colors.bg },
               headerTitleStyle: {
                 color: theme.colors.textPrimary,

@@ -17,9 +17,15 @@ import { DeviceEventEmitter } from 'react-native';
 import { peekBuffer, ackBuffer, onSmsReceived, type RawEvent } from './native/SmsModule';
 import { onNotificationReceived } from './native/NotificationModule';
 import { parseTransaction } from './parser';
+import { parseMandateNotice } from './upcoming';
+import { recordNotice } from './upcomingStore';
+import { parseIpoEvent } from './ipo';
+import type { IpoIssuer } from './ipo';
+import { getIpoIssuers, reconcileIpoDebits, recordIpoEvent } from './ipoStore';
 import { insertTransaction, getAllMerchantRules } from './db';
 import { runTransferPairing, snapshotMaxId } from './transferSync';
 import { runCancelOut } from './cancelSync';
+import { runRefundLinking } from './refundSync';
 import { classify } from './classify';
 import type { Identity } from './identity';
 import { getIdentity, getFamilyMembers, getFriends, getAmazonTopupFamily } from './settings';
@@ -43,6 +49,7 @@ let learnedRulesCache: Record<string, string> = {};
 let familyCache: string[] = [];
 let friendsCache: string[] = [];
 let amazonTopupFamilyCache = true;
+let ipoIssuersCache: IpoIssuer[] = [];
 
 /**
  * Reload identity and learned merchant rules from the DB into module-level
@@ -57,6 +64,7 @@ export function refreshSyncCaches(): void {
   familyCache = getFamilyMembers();
   friendsCache = getFriends();
   amazonTopupFamilyCache = getAmazonTopupFamily();
+  ipoIssuersCache = getIpoIssuers();
 }
 
 // ─── Core processing ──────────────────────────────────────────────────────────
@@ -80,6 +88,31 @@ function processOne(e: RawEvent): boolean {
     return false;
   }
 
+  // 0. Pre-debit notices ("E-Mandate! Rs.X will be deducted on …") are never
+  //    transactions; keep them for the "Coming up" card instead.
+  const notice = parseMandateNotice(e.body);
+  if (notice) {
+    try {
+      recordNotice(notice);
+    } catch {
+      // Best effort; the message must still not become a transaction.
+    }
+    return false;
+  }
+
+  // 0b. IPO status messages (applied / blocked / refunded / allotted) are
+  //     tracked, never counted: only the bank's final debit is money.
+  const ipo = parseIpoEvent(e.body, e.ts);
+  if (ipo) {
+    try {
+      recordIpoEvent(ipo);
+      ipoIssuersCache = getIpoIssuers();
+    } catch {
+      // Best effort; the message must still not become a transaction.
+    }
+    return false;
+  }
+
   // 1. Parse — null means the message is not a transaction.
   const parsed = parseTransaction(sender, e.body, e.ts);
   if (!parsed) {
@@ -93,6 +126,7 @@ function processOne(e: RawEvent): boolean {
     family: familyCache,
     friends: friendsCache,
     amazonTopupFamily: amazonTopupFamilyCache,
+    ipoIssuers: ipoIssuersCache,
   });
 
   // 3. Merchant fallback chain: parser merchant → counterparty → sender.
@@ -135,6 +169,7 @@ function pairNewRows(maxIdBefore: number): void {
     // Own-account transfers first, so the cancel-out pass skips rows now 'self'.
     runTransferPairing(maxIdBefore, identityCache);
     runCancelOut(maxIdBefore, identityCache, friendsCache);
+    runRefundLinking(maxIdBefore);
   } catch {
     // Pairing is a convenience; the rows are already safely stored.
   }
@@ -190,6 +225,11 @@ export async function syncBuffer(): Promise<number> {
     }
   } catch {
     // Native module not ready (e.g. dev fast-refresh) — buffer persists for next drain.
+  }
+  try {
+    reconcileIpoDebits();
+  } catch {
+    // Convenience pass; rows are already stored.
   }
   if (inserted > 0) {
     pairNewRows(maxIdBefore);
