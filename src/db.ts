@@ -1020,10 +1020,12 @@ export function getIncomeSources(
 /** Like getIncomeSources but over income AND expense rows (for the Friends suggestions). */
 export function getPeopleSources(
   limit = 200,
-): { merchant: string | null; counterparty: string | null; total: number }[] {
+): { merchant: string | null; counterparty: string | null; total: number; upi: boolean }[] {
   const conn = requireDb();
   const res = conn.executeSync(
-    `SELECT merchant, counterparty, SUM(amount) AS total FROM transactions
+    `SELECT merchant, counterparty, SUM(amount) AS total,
+              MAX(CASE WHEN raw_text LIKE '%UPI%' OR counterparty LIKE '%@%' THEN 1 ELSE 0 END) AS upi
+         FROM transactions
       WHERE type IN ('income', 'expense')
       GROUP BY merchant, counterparty ORDER BY total DESC LIMIT ?`,
     [limit],
@@ -1032,6 +1034,7 @@ export function getPeopleSources(
     merchant: r.merchant != null ? String(r.merchant) : null,
     counterparty: r.counterparty != null ? String(r.counterparty) : null,
     total: Number(r.total ?? 0),
+    upi: Number(r.upi ?? 0) === 1,
   }));
 }
 

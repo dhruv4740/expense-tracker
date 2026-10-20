@@ -56,4 +56,26 @@ describe('suggestFamily', () => {
   it('respects the limit', () => {
     expect(suggestFamily(rows, { identity, family: [] }, 1)).toHaveLength(1);
   });
+  it('drops businesses: name markers, city suffixes and card-only spend', () => {
+    const biz = [
+      'slice small finance bank',
+      'KOMOREBI TECH SOLUT',
+      'RELIANCE RETAIL LIMITE',
+      'DELIURE Mumbai',
+      'M S GAURAV SWEE THANE',
+      'VITA NOVA GOURM GURUGRAM',
+      'Blue Bird Enterprises',
+    ].map(merchant => ({ merchant, counterparty: null, total: 50000 }));
+    const people = [{ merchant: 'Testa Samplekar', counterparty: null, total: 1000 }];
+    expect(suggestFamily([...biz, ...people], { identity, family: [] }).map(x => x.value)).toEqual([
+      'Testa Samplekar',
+    ]);
+  });
+  it('a person-like name seen only on card/POS spend (upi=false) is not suggested', () => {
+    const cardRows = [
+      { merchant: 'Rohan Mehra', counterparty: null, total: 9000, upi: false },
+      { merchant: 'Neha Kapoor', counterparty: null, total: 8000, upi: true },
+    ];
+    expect(suggestFamily(cardRows, { identity, family: [] }).map(x => x.value)).toEqual(['Neha Kapoor']);
+  });
 });

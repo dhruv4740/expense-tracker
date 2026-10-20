@@ -8,6 +8,7 @@ import { categorize, MERCHANT_VPA_RE } from './categories';
 import { isFamilyMember } from './classify';
 import { isSelfTransfer } from './identity';
 import type { Identity } from './identity';
+import { isBusinessName } from './settle';
 
 export interface AccountCount {
   account: string;
@@ -18,6 +19,11 @@ export interface IncomeSource {
   merchant: string | null;
   counterparty: string | null;
   total: number;
+  /**
+   * Whether any of these rows was a UPI payment. false = card/POS/other spend only, which
+   * is never a person. Absent = unknown (income sources), not filtered.
+   */
+  upi?: boolean;
 }
 
 export interface FamilySuggestion {
@@ -52,9 +58,13 @@ const NOT_A_NAME_RE =
   /\b(processed|approve|approved|request|requested|successfully|shall|debited|credited|account|transaction|payment|has|been|your|view|click|link)\b/i;
 const MAX_NAME_WORDS = 5;
 
+/** Business markers and Indian city suffixes that bank-truncated merchant names carry. */
+const BUSINESS_MARKER_RE =
+  /\b(tech|solut\w*|retail|swee\w*|gourm\w*|foods?|bakery|cafe|restaurant|kitchen|stores?|supermart|mart|traders?|enterprises?|finance|fintech|services?|pvt|ltd|limite\w*|bank|m\s+s)\b|\b(?:mumbai|thane|delhi|gurugram|gurgaon|noida|pune|bangalore|bengaluru|hyderabad|chennai|kolkata|ahmedabad|jaipur|navi mumbai)$/i;
+
 function looksLikePerson(name: string): boolean {
   const t = name.trim();
-  if (!PERSON_NAME_RE.test(t) || NOT_A_NAME_RE.test(t)) {
+  if (!PERSON_NAME_RE.test(t) || NOT_A_NAME_RE.test(t) || BUSINESS_MARKER_RE.test(t) || isBusinessName(t)) {
     return false;
   }
   const words = t.split(/\s+/).filter(w => w.length > 0).length;
@@ -78,6 +88,9 @@ export function suggestFamily(
 ): FamilySuggestion[] {
   const byKey = new Map<string, FamilySuggestion>();
   for (const r of rows) {
+    if (r.upi === false) {
+      continue;
+    }
     const candidates: string[] = [];
     if (r.merchant && looksLikePerson(r.merchant)) {
       candidates.push(r.merchant.trim());
