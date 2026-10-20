@@ -5,6 +5,7 @@
 //     (stays until seen/dismissed; Undo restores the rows' previous types)
 //  2. Suggested own-account transfer     — "Looks like a transfer … · Link / Not this"
 //  2b. Suggested cancel-out (friend's payment ↔ a spend; Link / Not this)
+//  2c. Suggested refund (amount-only match to a spend; Link / Not this)
 //  3. Suggested repayment                — only high-confidence pairs (settle.isBannerWorthy)
 // No Android notifications and no background work (RULES.md §1): this runs when
 // the Dashboard is focused or data changes while the app is open.
@@ -15,6 +16,8 @@ import { useFocusEffect } from '@react-navigation/native';
 
 import { setSettlement } from '../db';
 import { dismissCancel, getCancelSuggestions, linkCancel } from '../cancelSync';
+import { dismissRefund, getRefundSuggestions, linkRefund } from '../refundSync';
+import type { RefundSuggestion } from '../refundSync';
 import type { CancelPair } from '../cancelOut';
 import { getFriends, getIdentity } from '../settings';
 import { DATA_CHANGED } from '../sync';
@@ -48,10 +51,11 @@ interface BannerState {
   autoMore: number;
   suggestion: TransferPair | null;
   cancel: CancelPair | null;
+  refund: RefundSuggestion | null;
   repay: RepaymentBanner | null;
 }
 
-const EMPTY: BannerState = { auto: null, autoMore: 0, suggestion: null, cancel: null, repay: null };
+const EMPTY: BannerState = { auto: null, autoMore: 0, suggestion: null, cancel: null, refund: null, repay: null };
 
 function load(): BannerState {
   try {
@@ -61,6 +65,7 @@ function load(): BannerState {
       autoMore: Math.max(autos.length - 1, 0),
       suggestion: getTransferSuggestions(getIdentity())[0] ?? null,
       cancel: getCancelSuggestions(getIdentity(), getFriends())[0] ?? null,
+      refund: getRefundSuggestions()[0] ?? null,
       repay: getRepaymentBanner(),
     };
   } catch {
@@ -90,6 +95,7 @@ export default function DashboardBanners() {
   const take = <T,>(x: T | null): T | null => (x && slots > 0 ? (slots--, x) : null);
   const auto = take(state.auto);
   const cancel = take(state.cancel);
+  const refund = take(state.refund);
   const repay = take(state.repay);
   const suggestion = take(state.suggestion);
 
@@ -139,6 +145,31 @@ export default function DashboardBanners() {
           <TouchableOpacity
             onPress={() => {
               dismissCancel(cancel.expense.id, cancel.income.id);
+              reload();
+            }}
+          >
+            <Text style={styles.dim}>Not this</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {refund && (
+        <View style={styles.banner}>
+          <Text style={styles.text}>
+            {rupees(refund.refund.amount)} credit may be a refund of your{' '}
+            {displayMerchant(refund.parent.merchant ?? null) ?? 'payment'}
+          </Text>
+          <TouchableOpacity
+            onPress={() => {
+              linkRefund(refund.parent.id, refund.refund.id);
+              changed();
+            }}
+          >
+            <Text style={styles.action}>Link</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => {
+              dismissRefund(refund.parent.id, refund.refund.id);
               reload();
             }}
           >

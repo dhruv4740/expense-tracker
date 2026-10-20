@@ -4,15 +4,19 @@
 // payment it returns (refundLink.ts) and linked via settles_id, so the spend
 // nets down and the refund stops counting as income. Logged in the same undo
 // log as cancel-out auto-links. Runs on sync only; no background work.
+// Only ref-number and merchant+amount matches auto-link; an amount-only match is
+// a medium-confidence suggestion the user accepts (like cancel-out's medium pairs).
 
-import { getTransactionsAfterId, getTransactionsBetween, setSettlement } from './db';
+import { getTransactionById, getTransactionsAfterId, getTransactionsBetween, setSettlement } from './db';
 import type { TransactionRow } from './db';
+import { cancelKey } from './cancelOut';
+import { monthRange } from './dates';
 import { REFUND_WINDOW_MS, findRefundParent, isRefundRow } from './refundLink';
 import type { RefundRow } from './refundLink';
 import { paidBack } from './netting';
 import { displayMerchant } from './merchantDisplay';
 import { getJSON, setJSON } from './settings';
-import { AUTO_SELF_LOG_KEY, appendBatch } from './transferLog';
+import { AUTO_SELF_LOG_KEY, CANCEL_DISMISSED_KEY, addDismissed, appendBatch } from './transferLog';
 import type { AutoSelfBatch, AutoSelfEntry } from './transferLog';
 
 function toRows(rows: TransactionRow[]): RefundRow[] {
@@ -25,7 +29,11 @@ function toRows(rows: TransactionRow[]): RefundRow[] {
   return out;
 }
 
-/** Link refunds among the rows inserted after `maxIdBefore`. Returns the number linked. */
+/**
+ * Link refunds among the rows inserted after `maxIdBefore` by ref number or
+ * merchant+amount. Amount-only matches are left for getRefundSuggestions.
+ * Returns the number linked.
+ */
 export function runRefundLinking(maxIdBefore: number): number {
   const fresh = toRows(getTransactionsAfterId(maxIdBefore)).filter(isRefundRow);
   if (fresh.length === 0) {
@@ -42,7 +50,7 @@ export function runRefundLinking(maxIdBefore: number): number {
   const entries: AutoSelfEntry[] = [];
   for (const r of fresh.sort((a, b) => a.timestamp - b.timestamp)) {
     const m = findRefundParent(r, pool, refunded);
-    if (!m) {
+    if (!m || m.basis === 'amount') {
       continue;
     }
     setSettlement(r.id, m.parent.id);
@@ -65,4 +73,41 @@ export function runRefundLinking(maxIdBefore: number): number {
     setJSON(AUTO_SELF_LOG_KEY, appendBatch(log, { at, entries }));
   }
   return entries.length;
+}
+
+export interface RefundSuggestion {
+  refund: RefundRow;
+  parent: RefundRow;
+}
+
+/** Unlinked, not-dismissed refunds this month whose only match is an equal amount. */
+export function getRefundSuggestions(): RefundSuggestion[] {
+  const { from, to } = monthRange(new Date());
+  const pool = toRows(getTransactionsBetween(from - REFUND_WINDOW_MS, to));
+  const refunded = new Map<number, number>();
+  for (const [id, v] of paidBack(pool.map(r => ({ ...r, category: '' })))) {
+    refunded.set(id, v.paid);
+  }
+  const dismissed = new Set(getJSON<string[]>(CANCEL_DISMISSED_KEY, []));
+  const out: RefundSuggestion[] = [];
+  for (const r of pool.filter(x => x.timestamp >= from && isRefundRow(x))) {
+    const m = findRefundParent(r, pool, refunded);
+    if (m && m.basis === 'amount' && !dismissed.has(cancelKey(m.parent.id, r.id))) {
+      out.push({ refund: r, parent: m.parent });
+    }
+  }
+  return out;
+}
+
+export function linkRefund(parentId: number, refundId: number): void {
+  if (getTransactionById(refundId)?.settles_id == null) {
+    setSettlement(refundId, parentId);
+  }
+}
+
+export function dismissRefund(parentId: number, refundId: number): void {
+  setJSON(
+    CANCEL_DISMISSED_KEY,
+    addDismissed(getJSON<string[]>(CANCEL_DISMISSED_KEY, []), cancelKey(parentId, refundId)),
+  );
 }

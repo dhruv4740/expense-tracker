@@ -9,7 +9,9 @@
 //   2. merchant + amount: the refund names the merchant ("Zomato order", "from
 //      Swiggy") and a spend at it, within 30 days before, is at least the refund
 //   3. amount only (bank credits like Kotak's name no merchant): exactly one
-//      spend of exactly that amount within 30 days before
+//      spend of exactly that amount within 30 days before. This is only a MEDIUM
+//      suggestion (basis 'amount'): callers must not auto-link it, the user taps
+//      to accept (refundSync.getRefundSuggestions).
 // Anything ambiguous stays unlinked.
 
 import { merchantKey } from './upcoming';
