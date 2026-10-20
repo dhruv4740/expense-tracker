@@ -27,6 +27,7 @@ import {
   getUnsettledRides,
   hasCategoryRows,
   getUncategorizedCount,
+  getLedgerRows,
 } from '../db';
 import type { Summary, UberSummary } from '../db';
 import { CATEGORY_META, CATEGORIES } from '../categories';
@@ -38,6 +39,7 @@ import { theme } from '../theme';
 import { monthRange } from '../dates';
 import { computeBudgetStatus } from '../budgets';
 import { outOfPocket } from '../netting';
+import { buildLedger, totalOutstanding } from '../ledger';
 import DashboardBanners from './DashboardBanners';
 import type { BudgetStatus } from '../budgets';
 
@@ -54,6 +56,10 @@ interface DashboardData {
   /** Any Uber-tagged row ever — keeps the row (the only door to the Uber
    * screen) visible in months with no rides yet. */
   uberEverUsed: boolean;
+  /** Total friends still owe you. */
+  duesOutstanding: number;
+  /** Any split ever recorded keeps the Friends & dues row visible. */
+  duesEver: boolean;
 }
 
 const BUDGET_WARN = 0.8;
@@ -70,7 +76,15 @@ function loadData(offset: number): DashboardData {
     uberSummary: getUberSummary(range),
     uberWaiting: getUnsettledRides(range).length,
     uberEverUsed: hasCategoryRows('Uber'),
+    ...ledgerSummary(),
   };
+}
+
+function ledgerSummary(): { duesOutstanding: number; duesEver: boolean } {
+  const ledger = buildLedger(
+    getLedgerRows().filter(r => r.id != null).map(r => ({ ...r, id: r.id as number })),
+  );
+  return { duesOutstanding: totalOutstanding(ledger), duesEver: ledger.length > 0 };
 }
 
 function rupees(n: number): string {
@@ -126,7 +140,7 @@ export default function DashboardScreen() {
     return () => sub.remove();
   }, [reload]);
 
-  const { summary, budgetStatus, uncategorizedCount, uberSummary, uberWaiting, uberEverUsed } = data;
+  const { summary, budgetStatus, uncategorizedCount, uberSummary, uberWaiting, uberEverUsed, duesOutstanding, duesEver } = data;
 
   const cats = summary.byCategory.filter(bc => bc.total > 0);
   const donutData = cats.map(bc => ({
@@ -256,6 +270,20 @@ export default function DashboardScreen() {
           <Text style={styles.uberText} numberOfLines={1}>
             Uber · {rupees(uberSummary.net)}
             {uberWaiting > 0 ? ` · ${uberWaiting} waiting for repayment` : ''}
+          </Text>
+          <Icon name="chevron-forward" size={16} color={theme.colors.textMuted} />
+        </TouchableOpacity>
+      )}
+
+      {duesEver && (
+        <TouchableOpacity
+          style={styles.uberRow}
+          onPress={() => navigation.navigate('FriendsDues')}
+          activeOpacity={0.8}
+        >
+          <Icon name="person" size={20} color={theme.colors.accent} />
+          <Text style={styles.uberText} numberOfLines={1}>
+            Friends & dues · {duesOutstanding > 0 ? `${rupees(duesOutstanding)} owed to you` : 'all settled'}
           </Text>
           <Icon name="chevron-forward" size={16} color={theme.colors.textMuted} />
         </TouchableOpacity>

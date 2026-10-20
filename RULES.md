@@ -143,7 +143,7 @@ Input: `(sender: string, body: string, ts?: number)`. Output: `ParsedTransaction
 ## 4. DB rules (`src/db.ts`, op-sqlite)
 - Library: `@op-engineering/op-sqlite` (replaces deprecated `react-native-quick-sqlite`; New-Arch ready).
 - One connection, opened once; enable **WAL** (`PRAGMA journal_mode=WAL`).
-- Migrations are linear and gated by `PRAGMA user_version` (currently v4) — every step is
+- Migrations are linear and gated by `PRAGMA user_version` (currently v5) — every step is
   `ALTER TABLE ... ADD COLUMN` or `CREATE TABLE IF NOT EXISTS`, never a rebuild/DROP/UPDATE of
   existing rows. This is a hard rule, not just current practice: existing installs carry real
   transaction history that must survive every update untouched.
@@ -164,6 +164,7 @@ Input: `(sender: string, body: string, ts?: number)`. Output: `ParsedTransaction
     channel          TEXT,                                  -- v3 ('sms' | 'notification' | 'manual' | NULL)
     settles_id       INTEGER,                               -- v4 (this row settles row N)
     owed_amount      REAL,                                  -- v4 (split ride: amount friends owe)
+    owed_friend      TEXT,                                  -- v5 (who owes owed_amount; NULL = not assigned)
     dedup_key        TEXT UNIQUE
   );
   CREATE INDEX IF NOT EXISTS idx_tx_timestamp ON transactions(timestamp);
@@ -184,6 +185,7 @@ Input: `(sender: string, body: string, ts?: number)`. Output: `ParsedTransaction
   repayment"); it never changes totals. `getSummary` also returns `fromFamily` (Family-category
   income) and `earned` (= received − fromFamily). Uber screen invariant: Paid − Got back = Your
   share, equal to the Uber row on the Dashboard.
+- **Friends & dues (v5).** `ledger.ts` groups split rows by `owed_friend`; a friend's balance = Σ `owed_amount` − opposite-direction `settles_id` children (clamped per split row, so an over-payment never goes negative). Cancel-out "share" links count as repayments. Rows with no friend show as "Not assigned". The screen reads `getLedgerRows()` on focus only.
 - **Strict idempotency:** `dedup_key = hash(source + amount + floor(ts/60000) + raw_text)`; insert with `INSERT OR IGNORE`. Prevents live-emit + buffer-drain double counts of the exact same message. Unaffected by the soft-dedup rule below — always applies.
 - **Soft cross-channel dedup** (user-chosen policy — see §8 for why "cross-channel only"): the same payment can arrive via SMS *and* a bank-app notification with different raw text (different strict key). An incoming row is dropped only when an *existing* row has a **known, different** channel (same-channel repeats are always kept), amount matches, timestamps are within 2 minutes, and counterparties agree or are unknown. Every pre-v3 row has `channel = NULL` and is exempt — NULL never triggers a drop. Manual entries (`channel = 'manual'`) never soft-dedup. Restore (`export.ts`) bypasses soft dedup entirely (`skipSoftDedup: true`) so it can't merge two genuine close-together payments; the strict key still keeps a restore idempotent.
 - API: `initDb()`, `insertTransaction(tx, options?)`, `insertManual(tx)`, `getAll()`, `queryTransactions(filters)`, `getSummary(range)` (spent/received/net + per-local-day and per-category breakdowns). No dead `getByDateRange`/`getMonthlySummary`/`getTrend` — removed, use `queryTransactions`/`getSummary`.

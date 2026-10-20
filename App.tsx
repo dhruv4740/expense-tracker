@@ -37,6 +37,7 @@ import EditTransactionScreen from './src/screens/EditTransactionScreen';
 import ReviewScreen from './src/screens/ReviewScreen';
 import MerchantRulesScreen from './src/screens/MerchantRulesScreen';
 import UberScreen from './src/screens/UberScreen';
+import FriendsDuesScreen from './src/screens/FriendsDuesScreen';
 
 // Enable native screen containers for React Navigation (reduces overdraw and
 // improves gesture performance on Android).
@@ -54,6 +55,7 @@ export type RootStackParamList = {
   Review: undefined;
   MerchantRules: undefined;
   Uber: undefined;
+  FriendsDues: undefined;
 };
 
 export type RootTabParamList = {
@@ -252,6 +254,20 @@ export default function App() {
             options={{
               headerShown: true,
               title: 'Uber Expenses',
+              headerStyle: { backgroundColor: theme.colors.bg },
+              headerTitleStyle: {
+                color: theme.colors.textPrimary,
+                fontWeight: theme.font.weight.semibold,
+              },
+              headerTintColor: theme.colors.accent,
+            }}
+          />
+          <Stack.Screen
+            name="FriendsDues"
+            component={FriendsDuesScreen}
+            options={{
+              headerShown: true,
+              title: 'Friends & dues',
               headerStyle: { backgroundColor: theme.colors.bg },
               headerTitleStyle: {
                 color: theme.colors.textPrimary,

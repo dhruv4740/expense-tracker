@@ -34,6 +34,8 @@ export interface TransactionRow {
   settles_id?: number | null;
   /** On a split expense: how much the user expects to be paid back. */
   owed_amount?: number | null;
+  /** Who owes `owed_amount` (free text; null = not assigned). Schema v5. */
+  owed_friend?: string | null;
   /**
    * Read-only, set by queryTransactions: total of opposite-direction rows linked
    * to this one via settles_id (see NETTING_JOIN). Undefined/0 when none.
@@ -136,7 +138,7 @@ export interface TransactionFilters {
 
 let db: DB | null = null;
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 function requireDb(): DB {
   if (!db) {
@@ -256,6 +258,14 @@ function migrate(conn: DB): void {
     version = 4;
   }
 
+  // v4 → v5: who owes the split. Additive-only; existing rows get NULL and show
+  // under "Not assigned" in Friends & dues.
+  if (version < 5) {
+    conn.executeSync('ALTER TABLE transactions ADD COLUMN owed_friend TEXT;');
+    conn.executeSync('PRAGMA user_version = 5;');
+    version = 5;
+  }
+
   // Catches a bumped SCHEMA_VERSION with no matching migration step — the
   // failure mode the interpolated PRAGMA above used to cause silently.
   if (version !== SCHEMA_VERSION) {
@@ -349,8 +359,8 @@ export function insertManual(
     `INSERT INTO transactions
        (amount, merchant, source, raw_text, category, timestamp, type,
         counterparty, account, note, category_source, dedup_key, channel,
-        settles_id, owed_amount)
-     VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, 'manual', ?, 'manual', ?, ?)`,
+        settles_id, owed_amount, owed_friend)
+     VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, 'manual', ?, 'manual', ?, ?, ?)`,
     [
       tx.amount,
       tx.merchant ?? null,
@@ -364,6 +374,7 @@ export function insertManual(
       dedup_key,
       tx.settles_id ?? null,
       tx.owed_amount ?? null,
+      tx.owed_friend ?? null,
     ],
   );
 
@@ -382,6 +393,7 @@ const EDITABLE_FIELDS: Array<keyof TransactionRow> = [
   'category_source',
   'settles_id',
   'owed_amount',
+  'owed_friend',
 ];
 
 export function updateTransaction(
@@ -450,6 +462,7 @@ function mapRow(row: Record<string, unknown>): TransactionRow {
     channel: row.channel != null ? (String(row.channel) as Channel) : null,
     settles_id: row.settles_id != null ? Number(row.settles_id) : null,
     owed_amount: row.owed_amount != null ? Number(row.owed_amount) : null,
+    owed_friend: row.owed_friend != null ? String(row.owed_friend) : null,
   };
 }
 
@@ -813,6 +826,18 @@ export function getUnsettledRides(range: Range): UnsettledRide[] {
  */
 export function setSettlement(id: number, settlesId: number | null): boolean {
   return updateTransaction(id, { settles_id: settlesId });
+}
+
+/** Every split row (owed_amount > 0) plus the rows that settle them, for the Friends & dues ledger. */
+export function getLedgerRows(): TransactionRow[] {
+  const conn = requireDb();
+  const res = conn.executeSync(
+    `SELECT * FROM transactions
+      WHERE (owed_amount IS NOT NULL AND owed_amount > 0 AND settles_id IS NULL)
+         OR settles_id IN (SELECT id FROM transactions WHERE owed_amount > 0)
+      ORDER BY timestamp DESC`,
+  );
+  return (res.rows ?? []).map(mapRow);
 }
 
 /** Rows linked to `id` (its settlers) and, if `id` itself settles one, that parent. */
