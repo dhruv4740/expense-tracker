@@ -17,6 +17,8 @@ import { DeviceEventEmitter } from 'react-native';
 import { peekBuffer, ackBuffer, onSmsReceived, type RawEvent } from './native/SmsModule';
 import { onNotificationReceived } from './native/NotificationModule';
 import { parseTransaction } from './parser';
+import { parseMandateNotice } from './upcoming';
+import { recordNotice } from './upcomingStore';
 import { insertTransaction, getAllMerchantRules } from './db';
 import { runTransferPairing, snapshotMaxId } from './transferSync';
 import { runCancelOut } from './cancelSync';
@@ -77,6 +79,18 @@ function processOne(e: RawEvent): boolean {
   // filters, this drops anything else that somehow reached the buffer.
   const fromGmail = e.pkg === GMAIL_PKG;
   if (fromGmail && !isAmazonWalletTopUp(e.body)) {
+    return false;
+  }
+
+  // 0. Pre-debit notices ("E-Mandate! Rs.X will be deducted on …") are never
+  //    transactions; keep them for the "Coming up" card instead.
+  const notice = parseMandateNotice(e.body);
+  if (notice) {
+    try {
+      recordNotice(notice);
+    } catch {
+      // Best effort; the message must still not become a transaction.
+    }
     return false;
   }
 

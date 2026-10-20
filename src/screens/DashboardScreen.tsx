@@ -41,6 +41,9 @@ import { computeBudgetStatus } from '../budgets';
 import { outOfPocket } from '../netting';
 import { buildLedger, totalOutstanding } from '../ledger';
 import DashboardBanners from './DashboardBanners';
+import UpcomingCard from './UpcomingCard';
+import { loadUpcoming } from '../upcomingStore';
+import type { UpcomingItem } from '../upcoming';
 import type { BudgetStatus } from '../budgets';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -60,6 +63,8 @@ interface DashboardData {
   duesOutstanding: number;
   /** Any split ever recorded keeps the Friends & dues row visible. */
   duesEver: boolean;
+  /** Autopay notices + recurring payments due soon (current month only). */
+  upcoming: UpcomingItem[];
 }
 
 const BUDGET_WARN = 0.8;
@@ -77,7 +82,20 @@ function loadData(offset: number): DashboardData {
     uberWaiting: getUnsettledRides(range).length,
     uberEverUsed: hasCategoryRows('Uber'),
     ...ledgerSummary(),
+    upcoming: offset === 0 ? safeUpcoming() : [],
   };
+}
+
+/** Due from today to the later of month-end and a week out; never breaks the Dashboard. */
+function safeUpcoming(): UpcomingItem[] {
+  try {
+    const now = Date.now();
+    const d = new Date(now);
+    const monthEnd = new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime() - 1;
+    return loadUpcoming(Math.max(monthEnd, now + 7 * 86_400_000), now);
+  } catch {
+    return [];
+  }
 }
 
 function ledgerSummary(): { duesOutstanding: number; duesEver: boolean } {
@@ -140,7 +158,7 @@ export default function DashboardScreen() {
     return () => sub.remove();
   }, [reload]);
 
-  const { summary, budgetStatus, uncategorizedCount, uberSummary, uberWaiting, uberEverUsed, duesOutstanding, duesEver } = data;
+  const { summary, budgetStatus, uncategorizedCount, uberSummary, uberWaiting, uberEverUsed, duesOutstanding, duesEver, upcoming } = data;
 
   const cats = summary.byCategory.filter(bc => bc.total > 0);
   const donutData = cats.map(bc => ({
@@ -288,6 +306,8 @@ export default function DashboardScreen() {
           <Icon name="chevron-forward" size={16} color={theme.colors.textMuted} />
         </TouchableOpacity>
       )}
+
+      <UpcomingCard items={upcoming} now={Date.now()} />
 
       {/* ── Budgets at ≥80% ── */}
       {hotBudgets.length > 0 && (
