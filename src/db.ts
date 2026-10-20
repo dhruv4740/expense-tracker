@@ -1017,6 +1017,24 @@ export function getIncomeSources(
   }));
 }
 
+/** Like getIncomeSources but over income AND expense rows (for the Friends suggestions). */
+export function getPeopleSources(
+  limit = 200,
+): { merchant: string | null; counterparty: string | null; total: number }[] {
+  const conn = requireDb();
+  const res = conn.executeSync(
+    `SELECT merchant, counterparty, SUM(amount) AS total FROM transactions
+      WHERE type IN ('income', 'expense')
+      GROUP BY merchant, counterparty ORDER BY total DESC LIMIT ?`,
+    [limit],
+  );
+  return (res.rows ?? []).map(r => ({
+    merchant: r.merchant != null ? String(r.merchant) : null,
+    counterparty: r.counterparty != null ? String(r.counterparty) : null,
+    total: Number(r.total ?? 0),
+  }));
+}
+
 // ─── key/value settings store ─────────────────────────────────────────────────
 
 export function getSetting(key: string): string | null {

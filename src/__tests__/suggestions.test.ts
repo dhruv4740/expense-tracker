@@ -40,6 +40,19 @@ describe('suggestFamily', () => {
     const r = suggestFamily(rows, { identity, family: ['Sona Rao'] });
     expect(r.map(x => x.value)).toEqual(['KIRAN RAO', 'uncle@okaxis']);
   });
+  it('drops message text from phantom rows and over-long phrases', () => {
+    const junk = [
+      { merchant: 'view and approve the request', counterparty: null, total: 99000 },
+      { merchant: 'Shawa rmaji has been successfully processed and shall your account by now', counterparty: null, total: 98000 },
+      { merchant: 'One Two Three Four Five Six', counterparty: null, total: 97000 },
+      { merchant: 'Harsha Vardhan', counterparty: null, total: 1000 },
+    ];
+    expect(suggestFamily(junk, { identity, family: [] }).map(x => x.value)).toEqual(['Harsha Vardhan']);
+  });
+  it('excludes anyone already on the friends list', () => {
+    const r = suggestFamily(rows, { identity, family: [], friends: ['Kiran Rao'] });
+    expect(r.map(x => x.value)).not.toContain('KIRAN RAO');
+  });
   it('respects the limit', () => {
     expect(suggestFamily(rows, { identity, family: [] }, 1)).toHaveLength(1);
   });

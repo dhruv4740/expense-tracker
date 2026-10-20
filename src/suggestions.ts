@@ -47,9 +47,18 @@ export function suggestOwnAccounts(
 
 const PERSON_NAME_RE = /^[A-Za-z][A-Za-z.' ]*$/;
 
+/** Words that show a "merchant" is really message text from a phantom/unparsed row. */
+const NOT_A_NAME_RE =
+  /\b(processed|approve|approved|request|requested|successfully|shall|debited|credited|account|transaction|payment|has|been|your|view|click|link)\b/i;
+const MAX_NAME_WORDS = 5;
+
 function looksLikePerson(name: string): boolean {
   const t = name.trim();
-  return PERSON_NAME_RE.test(t) && t.split(/\s+/).filter(w => w.length > 0).length >= 2;
+  if (!PERSON_NAME_RE.test(t) || NOT_A_NAME_RE.test(t)) {
+    return false;
+  }
+  const words = t.split(/\s+/).filter(w => w.length > 0).length;
+  return words >= 2 && words <= MAX_NAME_WORDS;
 }
 
 function isPersonalVpa(v: string): boolean {
@@ -58,12 +67,13 @@ function isPersonalVpa(v: string): boolean {
 
 /**
  * Top income counterparties by total amount that look like a person (>= 2 name
- * tokens) or a personal VPA, excluding anyone already in the family list, the
- * user themself, and anything the brand map already recognises.
+ * tokens, at most 5, no message-text words) or a personal VPA, excluding anyone
+ * already in the family or friends list, the user themself, and anything the
+ * brand map already recognises. Used for both the Family and Friends chips.
  */
 export function suggestFamily(
   rows: IncomeSource[],
-  ctx: { identity: Identity; family: string[] },
+  ctx: { identity: Identity; family: string[]; friends?: string[] },
   limit = 6,
 ): FamilySuggestion[] {
   const byKey = new Map<string, FamilySuggestion>();
@@ -75,7 +85,8 @@ export function suggestFamily(
       candidates.push(r.counterparty.trim());
     }
     for (const value of candidates) {
-      if (isFamilyMember({ merchant: value, counterparty: null }, ctx.family)) {
+      const asRow = { merchant: value, counterparty: null };
+      if (isFamilyMember(asRow, ctx.family) || isFamilyMember(asRow, ctx.friends ?? [])) {
         continue;
       }
       if (isSelfTransfer({ merchant: value, counterparty: null }, ctx.identity)) {
