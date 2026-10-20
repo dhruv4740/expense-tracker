@@ -292,6 +292,12 @@ const TEMPLATES: Template[] = [
     isExpense: false,
     merchant: () => 'Deposit interest',
   },
+  // A third party pushing money to the user's account (no "credited"/"received" word)
+  {
+    re: /^(?:This is to inform you that )?M\/s (.+?) has transferred an amount of (?:Rs\.?|INR|₹)\s*[\d,.]+ to your account/i,
+    isExpense: false,
+    merchant: m => m[1],
+  },
   // Card-bill settlements (both legs; classify treats them as transfers)
   {
     re: /credit card bill of (?:Rs\.?|INR|₹)\s*[\d,.]+ has been paid successfully/i,

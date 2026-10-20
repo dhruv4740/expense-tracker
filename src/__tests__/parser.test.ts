@@ -311,4 +311,9 @@ describe('parseTransaction', () => {
     const r = parseTransaction('VM-HDFCBK-S', 'INR 2500.00 debited to HDFC Bank A/C No XXXXXXXXXX1234 towards MF Utilities India Pvt Ltd / 17210233051171D04B95  with UMRN HDFC7011507246002816', Date.now());
     expect(r!.merchant).toBe('MF Utilities India Pvt Ltd');
   });
+
+  it('parses "M/s X has transferred an amount of Rs. N to your account" as income', () => {
+    const r = parseTransaction('VM-YESBNK', 'This is to inform you that M/s ACME TRADERS has transferred an amount of Rs. 200.00 to your account no. XXXXXXXX1234 from their YES Bank account through RTGS/NEFT/IMPS', Date.now());
+    expect(r).toMatchObject({ amount: 200, isExpense: false, merchant: 'ACME TRADERS' });
+  });
 });
