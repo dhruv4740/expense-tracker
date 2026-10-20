@@ -33,7 +33,7 @@ import { DATA_CHANGED } from '../sync';
 import { AmountText, EmptyState, SectionHeader } from '../components';
 import { theme } from '../theme';
 import { displayMerchant } from '../merchantDisplay';
-import { formatDate } from '../dates';
+import { formatDate, monthRange } from '../dates';
 
 export default function ReviewScreen() {
   const [items, setItems] = useState<TransactionRow[]>([]);
@@ -41,8 +41,10 @@ export default function ReviewScreen() {
 
   const load = useCallback(() => {
     // Match getUncategorizedCount's predicate exactly (expenses only) so the
-    // Dashboard banner count and this list never disagree.
+    // Dashboard banner count and this list never disagree. Current month only:
+    // older months aren't worth nagging about.
     const rows = queryTransactions({
+      ...monthRange(),
       categories: ['Other'],
       types: ['expense'],
       includeSelf: false,

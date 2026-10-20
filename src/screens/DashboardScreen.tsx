@@ -66,7 +66,7 @@ function loadData(offset: number): DashboardData {
   return {
     summary: getSummary(range),
     budgetStatus: computeBudgetStatus(ref),
-    uncategorizedCount: getUncategorizedCount(),
+    uncategorizedCount: getUncategorizedCount(monthRange()),
     uberSummary: getUberSummary(range),
     uberWaiting: getUnsettledRides(range).length,
     uberEverUsed: hasCategoryRows('Uber'),

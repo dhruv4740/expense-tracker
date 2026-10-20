@@ -1105,12 +1105,13 @@ export function getRecurring(range: Range, minOccurrences = 2): RecurringEntry[]
   });
 }
 
-/** Count transactions with category='Other' (the uncategorized review queue). */
-export function getUncategorizedCount(): number {
+/** Count transactions with category='Other' (the uncategorized review queue) within `range`. */
+export function getUncategorizedCount(range: Range): number {
   const conn = requireDb();
   const res = conn.executeSync(
-    `SELECT COUNT(*) AS cnt FROM transactions WHERE category = 'Other' AND type = 'expense'`,
-    [],
+    `SELECT COUNT(*) AS cnt FROM transactions WHERE category = 'Other' AND type = 'expense'
+       AND timestamp >= ? AND timestamp <= ?`,
+    [range.from, range.to],
   );
   return Number((res.rows ?? [])[0]?.cnt ?? 0);
 }
