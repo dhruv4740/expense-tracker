@@ -41,7 +41,7 @@ import { computeBudgetStatus } from '../budgets';
 import { outOfPocket } from '../netting';
 import { buildLedger, totalOutstanding } from '../ledger';
 import DashboardBanners from './DashboardBanners';
-import UpcomingCard from './UpcomingCard';
+import UpcomingCard, { SafeToSpendCard } from './UpcomingCard';
 import { loadUpcoming } from '../upcomingStore';
 import type { UpcomingItem } from '../upcoming';
 import type { BudgetStatus } from '../budgets';
@@ -307,6 +307,15 @@ export default function DashboardScreen() {
         </TouchableOpacity>
       )}
 
+      {offset === 0 && (
+        <SafeToSpendCard
+          fromFamily={summary.fromFamily}
+          earned={summary.earned}
+          spent={summary.spent}
+          items={upcoming}
+          now={Date.now()}
+        />
+      )}
       <UpcomingCard items={upcoming} now={Date.now()} />
 
       {/* ── Budgets at ≥80% ── */}

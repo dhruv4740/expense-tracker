@@ -5,6 +5,7 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { Card, SectionHeader } from '../components';
 import { startOfDay, sumAmounts } from '../upcoming';
+import { safeToSpend, safeToSpendLine } from '../safeToSpend';
 import type { UpcomingItem } from '../upcoming';
 import { theme } from '../theme';
 
@@ -17,6 +18,33 @@ function rupees(n: number): string {
 
 function dayLabel(ts: number): string {
   return new Date(ts).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+}
+
+/** "₹X left · ~₹Y/day": this month's income minus spend minus autopays still due. */
+export function SafeToSpendCard({
+  fromFamily,
+  earned,
+  spent,
+  items,
+  now,
+}: {
+  fromFamily: number;
+  earned: number;
+  spent: number;
+  items: UpcomingItem[];
+  now: number;
+}) {
+  const d = new Date(now);
+  const monthEnd = new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime();
+  const committed = sumAmounts(items.filter(i => i.dueTs < monthEnd));
+  const s = safeToSpend({ fromFamily, earned, spent, committed }, now);
+  return (
+    <Card>
+      <Text style={styles.sub}>Safe to spend</Text>
+      <Text style={[styles.big, s.left < 0 && styles.over]}>{safeToSpendLine(s)}</Text>
+      {committed > 0 ? <Text style={styles.sub}>after {rupees(committed)} of autopays still due</Text> : null}
+    </Card>
+  );
 }
 
 export default function UpcomingCard({ items, now }: { items: UpcomingItem[]; now: number }) {
@@ -61,6 +89,8 @@ export default function UpcomingCard({ items, now }: { items: UpcomingItem[]; no
 }
 
 const styles = StyleSheet.create({
+  big: { fontSize: theme.font.size.lg, fontWeight: theme.font.weight.semibold, color: theme.colors.textPrimary },
+  over: { color: theme.colors.danger },
   totals: { fontSize: theme.font.size.sm, color: theme.colors.textSecondary, marginBottom: theme.spacing.sm },
   row: { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.sm, marginTop: theme.spacing.sm },
   main: { flex: 1, gap: 2 },
