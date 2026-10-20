@@ -391,17 +391,24 @@ export function suggestPairs(
 
 /**
  * Is this pair strong enough to raise a proactive banner? Exact (or equal-share)
- * amount AND either tight timing (≤3 days) or a same/known person (≤30 days).
+ * amount AND the same or a known person, within 30 days. Same amount + same day
+ * from a different person is NOT enough (it stays in the on-demand ranked list):
+ * a ₹1,200 shop payment and a ₹1,200 credit from a friend are just a coincidence.
  * Anything salary/refund-like never qualifies.
  */
 export function isBannerWorthy(s: PairScore): boolean {
   if (s.score <= 0 || s.penalized || !(s.exact || s.share)) {
     return false;
   }
-  if (s.deltaDays <= 3) {
-    return true;
-  }
   return (s.samePerson || s.knownPerson) && s.deltaDays <= 30;
+}
+
+/** Company-style names ("RELIANCE RETAIL LIMITE", "Acme Pvt Ltd") are never a friend to repay. */
+const BUSINESS_NAME_RE =
+  /\b(limite?d?|ltd|pvt|private|retail|systems?|services?|enterprises?|industries|technologies|solutions|stores?|mart|traders?|corp(?:oration)?|inc|llp|bank|payments?)\b/i;
+
+export function isBusinessName(...names: Array<string | null | undefined>): boolean {
+  return names.some(n => !!n && BUSINESS_NAME_RE.test(n));
 }
 
 export interface BannerRow extends CandidateTx {
@@ -453,6 +460,12 @@ export function pickRepaymentBanner(
         candidate.has_children ||
         dismissed.has(pairKey(parent.id, candidate.id)) ||
         candidate.timestamp < parent.timestamp
+      ) {
+        continue;
+      }
+      if (
+        isBusinessName(parent.merchant, parent.counterparty) ||
+        isBusinessName(candidate.merchant, candidate.counterparty)
       ) {
         continue;
       }

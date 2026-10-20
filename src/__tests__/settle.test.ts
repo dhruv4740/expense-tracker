@@ -481,11 +481,26 @@ describe('repayment banner (proactive, strict)', () => {
     expect(r[0].reason).toMatch(/different person/);
   });
 
-  it('same amount within 3 days → banner', () => {
+  it('same amount within 3 days from a different person → no banner', () => {
     const rows = [row({}), row({ id: 2, type: 'income', timestamp: T + 2 * DAY, counterparty: 'p2@upi' })];
+    expect(pickRepaymentBanner(rows, {}, new Set())).toBeNull();
+  });
+
+  it('same amount within 3 days from the same person → banner', () => {
+    const rows = [row({}), row({ id: 2, type: 'income', timestamp: T + 2 * DAY, counterparty: 'p1@upi' })];
     const b = pickRepaymentBanner(rows, {}, new Set());
     expect(b?.parent.id).toBe(1);
     expect(b?.candidate.id).toBe(2);
+  });
+
+  it('never pairs a shop payment with a friend credit, even for a known person', () => {
+    const rows = [
+      row({ amount: 1200, merchant: 'RELIANCE RETAIL LIMITE', counterparty: 'reliance@upi' }),
+      row({ id: 2, amount: 1200, type: 'income', merchant: 'TESTA A', counterparty: 'testa@upi' }),
+    ];
+    expect(pickRepaymentBanner(rows, { knownCounterparties: ['testa@upi'] }, new Set())).toBeNull();
+    // ...still available on demand.
+    expect(suggestPairs({ ...rows[0], type: 'expense' }, [rows[1]])).toHaveLength(1);
   });
 
   it('same person, equal amount, 20 days later → banner; known person too', () => {
