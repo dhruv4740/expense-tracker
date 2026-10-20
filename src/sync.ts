@@ -21,7 +21,7 @@ import { insertTransaction, getAllMerchantRules } from './db';
 import { runTransferPairing, snapshotMaxId } from './transferSync';
 import { classify } from './classify';
 import type { Identity } from './identity';
-import { getIdentity, getFamilyMembers } from './settings';
+import { getIdentity, getFamilyMembers, getFriends } from './settings';
 
 export const DATA_CHANGED = 'ExpenseDataChanged';
 
@@ -39,6 +39,7 @@ let identityCache: Identity = {
 
 let learnedRulesCache: Record<string, string> = {};
 let familyCache: string[] = [];
+let friendsCache: string[] = [];
 
 /**
  * Reload identity and learned merchant rules from the DB into module-level
@@ -51,6 +52,7 @@ export function refreshSyncCaches(): void {
   identityCache = getIdentity();
   learnedRulesCache = getAllMerchantRules();
   familyCache = getFamilyMembers();
+  friendsCache = getFriends();
 }
 
 // ─── Core processing ──────────────────────────────────────────────────────────
@@ -79,6 +81,7 @@ function processOne(e: RawEvent): boolean {
     identity: identityCache,
     rules: learnedRulesCache,
     family: familyCache,
+    friends: friendsCache,
   });
 
   // 3. Merchant fallback chain: parser merchant → counterparty → sender.

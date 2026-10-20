@@ -47,7 +47,7 @@ export interface RecategorizationDiff {
 export function planRecategorization(
   rows: TransactionRow[],
   rules: Record<string, string>,
-  ctx?: { identity: Identity; family: string[] },
+  ctx?: { identity: Identity; family: string[]; friends?: string[] },
 ): RecategorizationDiff[] {
   const diffs: RecategorizationDiff[] = [];
   for (const row of rows) {
@@ -58,7 +58,7 @@ export function planRecategorization(
       ? parseTransaction(row.source ?? '', row.raw_text ?? '', row.timestamp)
       : null;
     const recategorized = parsed
-      ? classify(parsed, { identity: ctx!.identity, rules, family: ctx!.family }).category
+      ? classify(parsed, { identity: ctx!.identity, rules, family: ctx!.family, friends: ctx!.friends }).category
       : categorize(
       row.merchant,
       row.raw_text ?? '',

@@ -87,6 +87,22 @@ export function setFamilyMembers(members: string[]): void {
   setJSON(FAMILY_KEY, members);
 }
 
+// ─── Friends ──────────────────────────────────────────────────────────────────
+
+const FRIENDS_KEY = 'friends';
+
+/** Names or VPAs of friends; any payment to/from them is categorized 'Friend Transfer'. */
+export function getFriends(): string[] {
+  const stored = getJSON<unknown>(FRIENDS_KEY, []);
+  return Array.isArray(stored)
+    ? stored.filter((x): x is string => typeof x === 'string')
+    : [];
+}
+
+export function setFriends(friends: string[]): void {
+  setJSON(FRIENDS_KEY, friends);
+}
+
 // ─── Dismissed capture apps ────────────────────────────────────────────────────
 
 const DISMISSED_APPS_KEY = 'dismissedApps';

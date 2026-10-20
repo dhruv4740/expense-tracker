@@ -16,6 +16,8 @@ export interface ClassifyContext {
   rules: Record<string, string>;
   /** Names or VPAs from the `family_members` setting. */
   family: string[];
+  /** Names or VPAs from the `friends` setting (optional: older callers omit it). */
+  friends?: string[];
 }
 
 export interface Classification {
@@ -23,13 +25,18 @@ export interface Classification {
   type: 'expense' | 'income' | 'self';
 }
 
-/** Lowercase, letters only: "SONA KIRAN KO.." → "sonadilipko". */
+/**
+ * Lowercase letters and digits only: "SONA KIRAN KO.." → "sonadilipko".
+ * Digits are kept so a phone-number VPA ("9988776118@ibl") stays specific
+ * instead of collapsing to "ibl", which would match every @ibl handle.
+ */
 function letters(s: string): string {
-  return s.toLowerCase().replace(/[^a-z]/g, '');
+  return s.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 /**
- * True when a credit's merchant/counterparty is a configured family member.
+ * True when a row's merchant/counterparty is on a configured people list
+ * (family_members or friends).
  * Candidate contains the entry, or (for bank-truncated names like
  * "SONA KIRAN KO..") the entry starts with the candidate — only when the
  * candidate has at least 8 letters, so short fragments can't match.
@@ -73,6 +80,10 @@ export function classify(
   // Self check ran first: the user's own full name contains the father's name.
   if (!parsed.isExpense && isFamilyMember(parsed, ctx.family)) {
     return { category: 'Family', type };
+  }
+  // Friends: both directions; type stays as parsed. Family wins over friend.
+  if (ctx.friends && isFamilyMember(parsed, ctx.friends)) {
+    return { category: 'Friend Transfer', type };
   }
   if (kind === 'investment') {
     return { category: 'Investment', type };

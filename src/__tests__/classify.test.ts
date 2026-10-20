@@ -124,6 +124,46 @@ describe('classify', () => {
   });
 });
 
+describe('classify: friends', () => {
+  const friends = ['Testa Ajay Samplekar', '9988776118@ibl'];
+  const ctx = { identity, rules: {}, family: ['Sona Priya Rao'], friends };
+  const parse = (body: string) => parseTransaction('VM-TEST-S', body, 1)!;
+
+  it('a payment to a friend is Friend Transfer, still an expense', () => {
+    const r = classify(
+      parse('Rs. 1,200 sent from a/c xx9999 on 03-Oct-26 to TESTA AJAY SAMPLEKAR (UPI Ref: 628474453305).'),
+      ctx,
+    );
+    expect(r).toEqual({ category: 'Friend Transfer', type: 'expense' });
+  });
+
+  it('a credit from a friend is Friend Transfer, still income', () => {
+    const r = classify(
+      parse('Your account XXXXXXX9999 is credited by Rs.700 on 18-08-26 received from account XXXXXXX2222/TESTA AJAY SAMPLEKAR (IMPS Ref no. 1).'),
+      ctx,
+    );
+    expect(r).toEqual({ category: 'Friend Transfer', type: 'income' });
+  });
+
+  it('precedence: self beats family beats friend', () => {
+    const credit = (who: string) =>
+      parse(`Your account XXXXXXX1111 is credited by Rs.5000 on 18-08-26 received from account XXXXXXX2222/${who} (IMPS Ref no. 1).`);
+    expect(classify(credit('ANITA RAO'), { ...ctx, friends: ['Anita Rao'] }).type).toBe('self');
+    expect(classify(credit('SONA PRIYA RAO'), { ...ctx, friends: ['Sona Priya Rao'] }).category).toBe('Family');
+  });
+
+  it('a friend phone VPA matches that handle only, not every @ibl handle', () => {
+    expect(isFamilyMember({ merchant: null, counterparty: '9988776118@ibl' }, friends)).toBe(true);
+    expect(isFamilyMember({ merchant: null, counterparty: '9000000000@ibl' }, friends)).toBe(false);
+    expect(isFamilyMember({ merchant: null, counterparty: 'other@ibl' }, friends)).toBe(false);
+  });
+
+  it('no friends list leaves classification unchanged', () => {
+    const body = 'Rs. 1,200 sent from a/c xx9999 on 03-Oct-26 to TESTA AJAY SAMPLEKAR (UPI Ref: 628474453305).';
+    expect(classify(parse(body), { identity, rules: {}, family: [] }).category).not.toBe('Friend Transfer');
+  });
+});
+
 describe('classify: own-account IMPS', () => {
   const ctx = { identity, rules: {}, family: [] as string[] };
   const parse = (body: string) => parseTransaction('VM-TEST-S', body, 1)!;

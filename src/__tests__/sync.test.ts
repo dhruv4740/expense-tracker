@@ -30,6 +30,7 @@ jest.mock('../transferSync', () => ({
 jest.mock('../settings', () => ({
   getIdentity: jest.fn(() => ({ name: '', phones: [], upiHandles: [], accountLast4: [] })),
   getFamilyMembers: jest.fn(() => []),
+  getFriends: jest.fn(() => []),
 }));
 
 import { syncBuffer } from '../sync';

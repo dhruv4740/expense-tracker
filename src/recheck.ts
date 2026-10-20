@@ -42,6 +42,7 @@ export interface RecheckCtx {
   identity: Identity;
   rules: Record<string, string>;
   family: string[];
+  friends?: string[];
   /** Row ids never to change (e.g. rows in the auto-pairing log). */
   protectedIds?: number[];
 }

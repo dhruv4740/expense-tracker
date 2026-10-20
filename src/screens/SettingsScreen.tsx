@@ -27,6 +27,7 @@ import {
   OVERALL_BUDGET_KEY,
   getAccountCounts,
   getIncomeSources,
+  getPeopleSources,
 } from '../db';
 import type { Budget } from '../db';
 import { CATEGORIES } from '../categories';
@@ -37,6 +38,8 @@ import {
   setDismissedApps,
   getFamilyMembers,
   setFamilyMembers,
+  getFriends,
+  setFriends,
 } from '../settings';
 import { suggestOwnAccounts, suggestFamily } from '../suggestions';
 import type { AccountCount, FamilySuggestion } from '../suggestions';
@@ -154,6 +157,9 @@ export default function SettingsScreen() {
   const [family, setFamily] = useState<string[]>([]);
   const [familyInput, setFamilyInput] = useState('');
   const [familySuggestions, setFamilySuggestions] = useState<FamilySuggestion[]>([]);
+  const [friends, setFriendsState] = useState<string[]>([]);
+  const [friendInput, setFriendInput] = useState('');
+  const [friendSuggestions, setFriendSuggestions] = useState<FamilySuggestion[]>([]);
 
   // ── Budgets ─────────────────────────────────────────────────────────────────
   const [overallBudget, setOverallBudget] = useState('');
@@ -186,7 +192,14 @@ export default function SettingsScreen() {
     const fam = getFamilyMembers();
     setFamily(fam);
     setAccountSuggestions(suggestOwnAccounts(getAccountCounts(), identity));
-    setFamilySuggestions(suggestFamily(getIncomeSources(), { identity, family: fam }));
+    const fr = getFriends();
+    setFriendsState(fr);
+    setFamilySuggestions(
+      suggestFamily(getIncomeSources(), { identity, family: fam, friends: fr }),
+    );
+    setFriendSuggestions(
+      suggestFamily(getPeopleSources(), { identity, family: fam, friends: fr }),
+    );
   }, []);
 
   const load = useCallback(async () => {
@@ -291,11 +304,26 @@ export default function SettingsScreen() {
 
   function handleAddFamily(value: string) {
     const v = value.trim();
-    if (!v || family.some(f => f.toLowerCase() === v.toLowerCase())) {
+    if (!v || [...family, ...friends].some(f => f.toLowerCase() === v.toLowerCase())) {
       return;
     }
     saveFamily([...family, v]);
     setFamilyInput('');
+  }
+
+  function saveFriends(next: string[]) {
+    setFriends(next);
+    refreshSyncCaches();
+    loadSuggestions();
+  }
+
+  function handleAddFriend(value: string) {
+    const v = value.trim();
+    if (!v || [...family, ...friends].some(f => f.toLowerCase() === v.toLowerCase())) {
+      return;
+    }
+    saveFriends([...friends, v]);
+    setFriendInput('');
   }
 
   // ── Budget save ──────────────────────────────────────────────────────────────
@@ -509,6 +537,56 @@ export default function SettingsScreen() {
                   key={sug.value}
                   style={styles.chip}
                   onPress={() => handleAddFamily(sug.value)}
+                >
+                  <Text style={styles.chipText}>
+                    + {sug.value} · {shortRupees(sug.total)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        )}
+      </Card>
+
+      {/* ── Friends ── */}
+      <SectionHeader title="Friends" />
+      <Card>
+        <Text style={styles.subLabel}>
+          Payments to or from these people are categorised as Friend Transfer (family wins if
+          a name is in both).
+        </Text>
+        <View style={styles.chipRow}>
+          {friends.map(f => (
+            <TouchableOpacity
+              key={f}
+              style={styles.chip}
+              onPress={() => saveFriends(friends.filter(x => x !== f))}
+            >
+              <Text style={styles.chipText}>{f}  ✕</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        <InputRow
+          label="Add a name or UPI handle"
+          value={friendInput}
+          onChangeText={setFriendInput}
+          placeholder="Full name or name@upi"
+        />
+        <TouchableOpacity
+          style={styles.saveBtn}
+          onPress={() => handleAddFriend(friendInput)}
+        >
+          <Text style={styles.saveBtnText}>Add</Text>
+        </TouchableOpacity>
+        {friendSuggestions.length > 0 && (
+          <>
+            <Text style={[styles.subLabel, styles.suggestLabel]}>Suggestions</Text>
+            <View style={styles.chipRow}>
+              {friendSuggestions.map(sug => (
+                <TouchableOpacity
+                  key={sug.value}
+                  style={styles.chip}
+                  onPress={() => handleAddFriend(sug.value)}
                 >
                   <Text style={styles.chipText}>
                     + {sug.value} · {shortRupees(sug.total)}

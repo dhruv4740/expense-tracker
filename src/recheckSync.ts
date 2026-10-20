@@ -4,7 +4,7 @@
 import { getAllMerchantRules, getTransactionById, queryTransactions, updateTransaction } from './db';
 import { AUTO_SELF_LOG_KEY } from './transferLog';
 import type { AutoSelfBatch } from './transferLog';
-import { getFamilyMembers, getIdentity, getJSON, setJSON } from './settings';
+import { getFamilyMembers, getFriends, getIdentity, getJSON, setJSON } from './settings';
 import { refreshSyncCaches } from './sync';
 import { RECHECK_LOG_KEY, buildLog, planRecheck, planUndo } from './recheck';
 import type { RecheckChange, RecheckLog } from './recheck';
@@ -20,6 +20,7 @@ export function previewRecheck(): RecheckChange[] {
     identity: getIdentity(),
     rules: getAllMerchantRules(),
     family: getFamilyMembers(),
+    friends: getFriends(),
   });
 }
 
