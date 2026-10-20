@@ -44,7 +44,7 @@ function rupees(n: number): string {
 }
 
 export function safeToSpendLine(s: SafeToSpend): string {
-  if (s.left < 0) {
+  if (Math.round(s.left) < 0) {
     return `${rupees(s.left)} over this month's income`;
   }
   return `${rupees(s.left)} left · ~${rupees(s.perDay)}/day for ${s.daysLeft} day${s.daysLeft === 1 ? '' : 's'}`;

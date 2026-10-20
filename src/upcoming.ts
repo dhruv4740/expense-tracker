@@ -207,7 +207,7 @@ export function buildUpcoming(
 ): UpcomingItem[] {
   const today = startOfDay(now);
   const items: UpcomingItem[] = [];
-  const paid = (merchant: string, amount: number, dueTs: number) =>
+  const paid = (merchant: string, amount: number, dueTs: number, investment: boolean) =>
     recent.some(
       r =>
         r.type === 'expense' &&
@@ -215,10 +215,10 @@ export function buildUpcoming(
         Math.abs(r.amount - amount) <= 1 &&
         (merchantKey(r.merchant ?? r.counterparty) === merchantKey(merchant) ||
           // Mandate notices name the fund house; the bank debit names the AMC/ICCL.
-          r.category === 'Investment'),
+          (investment && r.category === 'Investment')),
     );
   for (const n of notices) {
-    if (n.dueTs < today || n.dueTs > until || paid(n.merchant, n.amount, n.dueTs)) {
+    if (n.dueTs < today || n.dueTs > until || paid(n.merchant, n.amount, n.dueTs, n.investment)) {
       continue;
     }
     items.push({
@@ -240,7 +240,7 @@ export function buildUpcoming(
       const covered = items.some(
         it => it.source === 'notice' && merchantKey(it.merchant) === r.key && Math.abs(it.dueTs - due) <= 4 * DAY,
       );
-      if (covered || paid(r.merchant, r.latest, due)) {
+      if (covered || paid(r.merchant, r.latest, due, r.investment)) {
         continue;
       }
       items.push({

@@ -17,7 +17,8 @@ const LAST_KEY = 'backup_last_ts';
 const NAME_RE = /^expense-tracker-backup-\d{4}-\d{2}-\d{2}-\d{4}(?: \(\d+\))?\.json$/;
 
 export function isBackupDue(last: number | null, now: number): boolean {
-  return last == null || now - last >= BACKUP_INTERVAL_MS;
+  // A last-backup time in the future (clock was wrong) must not suppress backups.
+  return last == null || last > now || now - last >= BACKUP_INTERVAL_MS;
 }
 
 /** expense-tracker-backup-YYYY-MM-DD-HHmm.json (local time; sorts chronologically). */
@@ -29,7 +30,13 @@ export function backupFileName(now: number): string {
 
 /** Oldest backup files beyond `keep`. Anything not named like our backups is never returned. */
 export function backupsToDelete(names: string[], keep: number = BACKUP_KEEP): string[] {
-  const ours = names.filter(n => NAME_RE.test(n)).sort(); // names sort by date
+  // Sort by date stem, then by the " (n)" suffix of same-minute duplicates
+  // (a plain string sort would put "… (1).json" before "….json").
+  const stem = (n: string) => n.replace(/(?: \(\d+\))?\.json$/, '');
+  const dup = (n: string) => Number(/ \((\d+)\)\.json$/.exec(n)?.[1] ?? 0);
+  const ours = names
+    .filter(n => NAME_RE.test(n))
+    .sort((a, b) => (stem(a) < stem(b) ? -1 : stem(a) > stem(b) ? 1 : dup(a) - dup(b)));
   return ours.length > keep ? ours.slice(0, ours.length - keep) : [];
 }
 
