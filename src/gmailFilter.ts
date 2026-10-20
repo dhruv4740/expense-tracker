@@ -2,7 +2,9 @@
 //
 // Gmail is NOT a general capture app. The native NotificationService buffers a
 // com.google.android.gm notification only when its text is an Amazon Pay wallet
-// top-up confirmation ("₹2000.00 added to your Amazon Pay Wallet"); every other
+// top-up confirmation ("₹2000.00 added to your Amazon Pay Wallet") or the cashback
+// credit that uses the same wording ("cashback ₹20 added to your Amazon Pay Wallet";
+// parser.ts tells them apart: top-up → Family, cashback → Cashback); every other
 // email notification is dropped before it reaches EventBuffer (privacy). The
 // same predicate runs again in sync.ts as a second line of defence.
 //

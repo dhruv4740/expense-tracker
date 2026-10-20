@@ -14,6 +14,7 @@ export type Category =
   | 'UPI'
   | 'Cash'
   | 'Income'
+  | 'Cashback'
   | 'Family'
   | 'Friend Transfer'
   | 'Loan/Dues'
@@ -34,6 +35,7 @@ export const CATEGORIES: Category[] = [
   'UPI',
   'Cash',
   'Income',
+  'Cashback',
   'Family',
   'Friend Transfer',
   'Loan/Dues',
@@ -66,6 +68,7 @@ export const CATEGORY_META: Record<Category, CategoryMeta> = {
   UPI:           { color: '#7E57C2', icon: 'swap-horizontal' },
   Cash:          { color: '#A5D6A7', icon: 'cash' },
   Income:        { color: '#66BB6A', icon: 'trending-up' },
+  Cashback:      { color: '#AED581', icon: 'gift' },
   Family:        { color: '#FF8A80', icon: 'home' },
   'Friend Transfer': { color: '#26A69A', icon: 'person' },
   'Loan/Dues':   { color: '#8D6E63', icon: 'wallet' },
@@ -117,6 +120,7 @@ export const GROUP_OF: Record<Category, CategoryGroup> = {
   'Friend Transfer': 'Transfers',
   'Loan/Dues': 'Transfers',
   Income: 'Income',
+  Cashback: 'Income',
   Family: 'Income',
   Other: 'Other',
 };

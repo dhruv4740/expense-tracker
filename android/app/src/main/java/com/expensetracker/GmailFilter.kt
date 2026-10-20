@@ -4,8 +4,10 @@ package com.expensetracker
  * Narrow, hard-coded Gmail filter for NotificationService (not a general allowlist entry).
  *
  * Only an Amazon Pay wallet top-up confirmation ("₹2000.00 added to your Amazon Pay
- * Wallet") is ever buffered from Gmail; every other email notification is dropped before
- * it reaches EventBuffer so no other email content is stored.
+ * Wallet") or the cashback credit that uses the same wording ("cashback ₹20 added to your
+ * Amazon Pay Wallet"; src/parser.ts tells them apart) is ever buffered from Gmail;
+ * every other email notification is dropped before it
+ * reaches EventBuffer so no other email content is stored.
  *
  * Mirrors src/gmailFilter.ts (which is what jest tests) — change both together.
  */

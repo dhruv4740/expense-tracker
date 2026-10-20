@@ -59,7 +59,8 @@ export type TransactionKind =
   | 'wallet_load'
   | 'own_transfer'
   | 'investment'
-  | 'wallet_topup';
+  | 'wallet_topup'
+  | 'cashback';
 
 // ─── Compiled regexes ─────────────────────────────────────────────────────────
 
@@ -235,6 +236,22 @@ interface Template {
  * generic direction logic. Each is specific enough that a match is decisive.
  */
 const TEMPLATES: Template[] = [
+  // Cashback credited/added (Amazon Pay wallet email, bank/UPI app SMS). Income, never
+  // Family; promos ("will be credited"), failures and debits are excluded up front
+  // because templates run before the negative guards.
+  {
+    re: /^(?![\s\S]*\bwill be\b)[\s\S]*\bcashback\b[\s\S]{0,60}?\badded\b[\s\S]{0,40}?\bamazon\s*pay\s*wallet/i,
+    isExpense: false,
+    merchant: () => 'Amazon Pay cashback',
+    kind: 'cashback',
+    source: 'Amazon Pay',
+  },
+  {
+    re: /^(?![\s\S]*(?:will be|could not|failed|declined|reversed|\botp\b|debited|\bamazon\s*pay\s*wallet))(?:[\s\S]*\bcashback\b[\s\S]*?\b(?:credited|added)\b|[\s\S]*\b(?:credited|added)\b[\s\S]*?\bcashback\b)/i,
+    isExpense: false,
+    merchant: () => 'Cashback',
+    kind: 'cashback',
+  },
   // Amazon Pay wallet top-up confirmation ("₹2000.00 added to your Amazon Pay
   // Wallet" / "You have added ₹2000.00 successfully to your Amazon Pay Wallet").
   // Income into the user's own wallet; classify() decides Family vs self. Must not

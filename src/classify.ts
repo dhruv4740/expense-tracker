@@ -76,6 +76,9 @@ export function classify(
       ? { category: 'Other', type: 'self' }
       : { category: 'Family', type: 'income' };
   }
+  if (kind === 'cashback') {
+    return { category: 'Cashback', type: 'income' };
+  }
   if (
     kind === 'card_bill' ||
     kind === 'wallet_load' ||

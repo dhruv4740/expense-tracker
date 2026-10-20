@@ -78,3 +78,38 @@ describe('dedup: Gmail email vs Amazon app notification', () => {
     expect(isSoftDuplicate({ ...base, channel: 'email' }, { ...base, channel: 'email' })).toBe(false);
   });
 });
+
+describe('Cashback', () => {
+  const ctx = { identity, rules: {}, family: [], friends: [], amazonTopupFamily: true };
+  const CB = 'Cashback of ₹20.00 added to your Amazon Pay Wallet. Updated Amazon Pay Balance ₹2424.41';
+
+  it('Gmail cashback is income/Cashback, not a Family top-up', () => {
+    expect(isAmazonWalletTopUp(CB)).toBe(true); // still passes the Gmail gate
+    const p = parseTransaction(GM, CB, 1)!;
+    expect(p.kind).toBe('cashback');
+    expect(p.amount).toBe(20);
+    expect(p.source).toBe('Amazon Pay');
+    expect(classify(p, ctx)).toEqual({ category: 'Cashback', type: 'income' });
+  });
+  it('the top-up wording still wins when cashback only appears after it', () => {
+    const body = 'You have added ₹2000.00 successfully to your Amazon Pay Wallet. Earn cashback on your next order';
+    const p = parseTransaction(GM, body, 1)!;
+    expect(p.kind).toBe('wallet_topup');
+    expect(classify(p, ctx).category).toBe('Family');
+  });
+  it('SMS/notification "cashback credited/added" is income/Cashback', () => {
+    for (const body of [
+      'Rs.15.00 cashback credited to your account XX1234',
+      'Cashback of Rs 25 added to your wallet',
+      '₹10 credited as cashback for your UPI payment',
+    ]) {
+      const p = parseTransaction('HDFCBK', body, 1)!;
+      expect(classify(p, ctx)).toEqual({ category: 'Cashback', type: 'income' });
+    }
+  });
+  it('promo, failed and debit messages are not cashback', () => {
+    expect(parseTransaction('HDFCBK', 'Get Rs.50 cashback will be credited within 7 days', 1)).toBeNull();
+    const d = parseTransaction('HDFCBK', 'Rs.500 debited from A/c XX1234 to SWIGGY. Cashback if any will be credited later', 1);
+    expect(d?.kind).not.toBe('cashback');
+  });
+});
