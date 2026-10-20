@@ -92,6 +92,11 @@ const NEGATIVE_GUARDS: RegExp[] = [
   /could not|failed|declined|unsuccessful|reversed request/i,
   /\botp\b|e-?mandate|autopay.*(?:set|registered)/i,
   /requested money|has requested/i,
+  // The user's OWN outgoing money request ("your request for Rs.500 ... has been sent to X")
+  /your request for (?:Rs\.?|INR|₹)\s*[\d,.]+[\s\S]*?has been sent to/i,
+  // Gambling/app sign-up bonuses and bill reminders are not account movements
+  /welcome bonus|prize pool/i,
+  /pay your due amount|bill for [\s\S]{0,40}has been sent to your registered email/i,
   // Merchant refund notices that only announce intent (the credit is the real
   // movement of money; "processed" / bank-credit messages are kept)
   /refund[\s\S]{0,120}\binitiated\b/i,
@@ -307,6 +312,18 @@ const TEMPLATES: Template[] = [
     kind: 'card_bill',
   },
   {
+    re: /received payment of (?:Rs\.?|INR|₹)\s*[\d,.]+ for your \S*card/i,
+    isExpense: false,
+    merchant: () => null,
+    kind: 'card_bill',
+  },
+  {
+    re: /^(?:Hi!?\s+)?Payment of (?:Rs\.?|INR|₹)\s*[\d,.]+ received towards .*Credit Card/i,
+    isExpense: false,
+    merchant: () => null,
+    kind: 'card_bill',
+  },
+  {
     re: /^Payment of (?:Rs\.?|INR|₹)\s*[\d,.]+ is credited to your .*Credit Card/i,
     isExpense: false,
     merchant: () => null,
@@ -424,6 +441,9 @@ export function cleanMerchant(candidate: string): string {
   raw = raw.replace(/^\s*(?:a\/c|account)\s*[x*\d]+\/?\s*/i, '');
   raw = raw.replace(/\s+via UPI.*$/i, '');
   raw = raw.replace(/\s+with txn ID.*$/i, '');
+  raw = raw.replace(/\s+using your .*$/i, '');
+  // "debited to HDFC Bank A/c XX3636 towards MF Utilities ... / <ref> with UMRN ...": the payee follows "towards"
+  raw = raw.replace(/^.*\btowards\s+/i, '').replace(/\s*\/\s*[A-Z0-9]{10,}.*$/i, '').replace(/\s+with$/i, '');
   raw = raw.replace(/\.?\s*UPI Ref.*$/i, '');
   raw = raw.replace(/\s+UMRN.*$/i, '');
   // The noise regex strips one tail clause per pass ("on 03/10/26 Ref 123").
