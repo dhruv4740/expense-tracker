@@ -44,6 +44,8 @@ import DashboardBanners from './DashboardBanners';
 import UpcomingCard, { SafeToSpendCard } from './UpcomingCard';
 import { loadUpcoming } from '../upcomingStore';
 import { getIpoEvents } from '../ipoStore';
+import { loadInsights } from '../insightsStore';
+import type { Insight } from '../insights';
 import type { UpcomingItem } from '../upcoming';
 import type { BudgetStatus } from '../budgets';
 
@@ -68,6 +70,8 @@ interface DashboardData {
   iposEver: boolean;
   /** Autopay notices + recurring payments due soon (current month only). */
   upcoming: UpcomingItem[];
+  /** Computed once per app open (current month only). */
+  insights: Insight[];
 }
 
 const BUDGET_WARN = 0.8;
@@ -87,6 +91,7 @@ function loadData(offset: number): DashboardData {
     ...ledgerSummary(),
     iposEver: safeIposEver(),
     upcoming: offset === 0 ? safeUpcoming() : [],
+    insights: offset === 0 ? safeInsights() : [],
   };
 }
 
@@ -97,6 +102,14 @@ function safeUpcoming(): UpcomingItem[] {
     const d = new Date(now);
     const monthEnd = new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime() - 1;
     return loadUpcoming(Math.max(monthEnd, now + 7 * 86_400_000), now);
+  } catch {
+    return [];
+  }
+}
+
+function safeInsights(): Insight[] {
+  try {
+    return loadInsights();
   } catch {
     return [];
   }
@@ -170,7 +183,7 @@ export default function DashboardScreen() {
     return () => sub.remove();
   }, [reload]);
 
-  const { summary, budgetStatus, uncategorizedCount, uberSummary, uberWaiting, uberEverUsed, duesOutstanding, duesEver, iposEver, upcoming } = data;
+  const { summary, budgetStatus, uncategorizedCount, uberSummary, uberWaiting, uberEverUsed, duesOutstanding, duesEver, iposEver, upcoming, insights } = data;
 
   const cats = summary.byCategory.filter(bc => bc.total > 0);
   const donutData = cats.map(bc => ({
@@ -344,6 +357,25 @@ export default function DashboardScreen() {
       )}
       <UpcomingCard items={upcoming} now={Date.now()} />
 
+      {insights.length > 0 && (
+        <>
+          <SectionHeader title="Insights" />
+          {insights.map(i => (
+            <View key={i.id} style={styles.insightCard}>
+              <Icon
+                name={i.tone === 'up' ? 'arrow-up' : i.tone === 'down' ? 'arrow-down' : 'stats'}
+                size={20}
+                color={i.tone === 'up' ? theme.colors.warning : theme.colors.accent}
+              />
+              <View style={styles.insightMain}>
+                <Text style={styles.insightTitle}>{i.title}</Text>
+                <Text style={styles.insightDetail}>{i.detail}</Text>
+              </View>
+            </View>
+          ))}
+        </>
+      )}
+
       {/* ── Budgets at ≥80% ── */}
       {hotBudgets.length > 0 && (
         <Card style={styles.budgetCard}>
@@ -505,6 +537,23 @@ const styles = StyleSheet.create({
     fontSize: theme.font.size.sm,
     color: theme.colors.textPrimary,
   },
+  insightCard: {
+    marginHorizontal: theme.spacing.lg,
+    marginBottom: theme.spacing.sm,
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.lg,
+    padding: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+  },
+  insightMain: { flex: 1, gap: 2 },
+  insightTitle: {
+    fontSize: theme.font.size.md,
+    fontWeight: theme.font.weight.semibold,
+    color: theme.colors.textPrimary,
+  },
+  insightDetail: { fontSize: theme.font.size.xs, color: theme.colors.textMuted },
   budgetCard: {
     marginTop: theme.spacing.lg,
   },
