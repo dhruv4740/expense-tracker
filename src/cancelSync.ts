@@ -6,42 +6,16 @@
 // computed on demand from the CURRENT month, so the one-off pass over existing
 // rows only ever suggests. In-app only; no background work (RULES.md §1).
 
-import {
-  getTransactionById,
-  getTransactionsAfterId,
-  getTransactionsBetween,
-  setSettlement,
-} from './db';
-import type { TransactionRow } from './db';
-import { cancelKey, CANCEL_MEDIUM_WINDOW_MS, findCancelPairs } from './cancelOut';
+import { getTransactionsAfterId, getTransactionsBetween, setSettlement } from './db';
+import { CANCEL_MEDIUM_WINDOW_MS, findCancelPairs } from './cancelOut';
 import type { CancelPair, CancelRow } from './cancelOut';
 import { monthRange } from './dates';
 import { displayMerchant } from './merchantDisplay';
 import type { Identity } from './identity';
-import { getJSON, setJSON } from './settings';
-import {
-  AUTO_SELF_LOG_KEY,
-  CANCEL_DISMISSED_KEY,
-  addDismissed,
-  appendBatch,
-} from './transferLog';
-import type { AutoSelfBatch, AutoSelfEntry } from './transferLog';
+import { appendAutoLog, dismissLink, dismissedKeys, linkIfUnlinked, withIds } from './linkGlue';
+import type { AutoSelfEntry } from './transferLog';
 
-function toCancelRows(rows: TransactionRow[]): CancelRow[] {
-  const out: CancelRow[] = [];
-  for (const r of rows) {
-    if (r.id != null) {
-      out.push({ ...r, id: r.id });
-    }
-  }
-  return out;
-}
-
-function dismissedSet(): Set<string> {
-  return new Set(getJSON<string[]>(CANCEL_DISMISSED_KEY, []));
-}
-
-export function personLabel(r: CancelRow): string {
+function personLabel(r: CancelRow): string {
   return r.counterparty ?? displayMerchant(r.merchant ?? null) ?? 'someone';
 }
 
@@ -51,14 +25,14 @@ export function personLabel(r: CancelRow): string {
  * own-account transfer pairing so rows it marked 'self' are skipped.
  */
 export function runCancelOut(maxIdBefore: number, identity: Identity, friends: string[]): number {
-  const fresh = toCancelRows(getTransactionsAfterId(maxIdBefore));
+  const fresh = withIds(getTransactionsAfterId(maxIdBefore));
   if (fresh.length === 0) {
     return 0;
   }
   const lo = Math.min(...fresh.map(r => r.timestamp)) - CANCEL_MEDIUM_WINDOW_MS;
   const hi = Math.max(...fresh.map(r => r.timestamp)) + CANCEL_MEDIUM_WINDOW_MS;
-  const pool = toCancelRows(getTransactionsBetween(lo, hi));
-  const high = findCancelPairs(fresh, pool, { identity, friends }, dismissedSet()).filter(
+  const pool = withIds(getTransactionsBetween(lo, hi));
+  const high = findCancelPairs(fresh, pool, { identity, friends }, dismissedKeys()).filter(
     p => p.confidence === 'high',
   );
   if (high.length === 0) {
@@ -81,27 +55,17 @@ export function runCancelOut(maxIdBefore: number, identity: Identity, friends: s
       undone: false,
     });
   }
-  const log = getJSON<AutoSelfBatch[]>(AUTO_SELF_LOG_KEY, []);
-  setJSON(AUTO_SELF_LOG_KEY, appendBatch(log, { at, entries }));
+  appendAutoLog(at, entries);
   return high.length;
 }
 
 /** Unlinked, not-dismissed candidate pairs among this month's rows. */
 export function getCancelSuggestions(identity: Identity, friends: string[]): CancelPair[] {
   const { from, to } = monthRange(new Date());
-  const rows = toCancelRows(getTransactionsBetween(from, to));
-  return findCancelPairs(rows, rows, { identity, friends }, dismissedSet());
+  const rows = withIds(getTransactionsBetween(from, to));
+  return findCancelPairs(rows, rows, { identity, friends }, dismissedKeys());
 }
 
-export function linkCancel(expenseId: number, incomeId: number): void {
-  if (getTransactionById(incomeId)?.settles_id == null) {
-    setSettlement(incomeId, expenseId);
-  }
-}
+export const linkCancel = linkIfUnlinked;
 
-export function dismissCancel(expenseId: number, incomeId: number): void {
-  setJSON(
-    CANCEL_DISMISSED_KEY,
-    addDismissed(getJSON<string[]>(CANCEL_DISMISSED_KEY, []), cancelKey(expenseId, incomeId)),
-  );
-}
+export const dismissCancel = dismissLink;

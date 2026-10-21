@@ -17,11 +17,9 @@ import {
 import type { TransactionRow } from './db';
 import type { Identity } from './identity';
 import { getJSON, setJSON } from './settings';
+import { addDismissedKey, appendAutoLog, dismissLink, withIds } from './linkGlue';
 import {
   AUTO_SELF_LOG_KEY,
-  CANCEL_DISMISSED_KEY,
-  addDismissed,
-  appendBatch,
   findEntry,
   markSeen,
   markUndone,
@@ -37,16 +35,6 @@ const DAY_MS = 86_400_000;
 const TRANSFER_DISMISSED_KEY = 'transfer_dismissed';
 const REPAY_DISMISSED_KEY = 'repay_dismissed';
 
-function toTransferRows(rows: TransactionRow[]): TransferRow[] {
-  const out: TransferRow[] = [];
-  for (const r of rows) {
-    if (r.id != null) {
-      out.push({ ...r, id: r.id });
-    }
-  }
-  return out;
-}
-
 /** Snapshot before a sync batch; rows inserted afterwards have id > this. */
 export const snapshotMaxId = getMaxTransactionId;
 
@@ -56,13 +44,13 @@ export const snapshotMaxId = getMaxTransactionId;
  * types so each can be undone. Returns the number of pairs applied.
  */
 export function runTransferPairing(maxIdBefore: number, identity: Identity): number {
-  const fresh = toTransferRows(getTransactionsAfterId(maxIdBefore));
+  const fresh = withIds(getTransactionsAfterId(maxIdBefore));
   if (fresh.length === 0) {
     return 0;
   }
   const lo = Math.min(...fresh.map(r => r.timestamp)) - MEDIUM_WINDOW_MS;
   const hi = Math.max(...fresh.map(r => r.timestamp)) + MEDIUM_WINDOW_MS;
-  const pool = toTransferRows(getTransactionsBetween(lo, hi));
+  const pool = withIds(getTransactionsBetween(lo, hi));
   const high = findTransferPairs(fresh, pool, identity).filter(p => p.confidence === 'high');
   if (high.length === 0) {
     return 0;
@@ -86,8 +74,7 @@ export function runTransferPairing(maxIdBefore: number, identity: Identity): num
       undone: false,
     });
   }
-  const log = getJSON<AutoSelfBatch[]>(AUTO_SELF_LOG_KEY, []);
-  setJSON(AUTO_SELF_LOG_KEY, appendBatch(log, { at, entries }));
+  appendAutoLog(at, entries);
   return high.length;
 }
 
@@ -114,10 +101,7 @@ export function undoAutoApplied(entryId: string): void {
     if (getTransactionById(childId)?.settles_id === parentId) {
       updateTransaction(childId, { settles_id: null });
     }
-    setJSON(
-      CANCEL_DISMISSED_KEY,
-      addDismissed(getJSON<string[]>(CANCEL_DISMISSED_KEY, []), `${parentId}:${childId}`),
-    );
+    dismissLink(parentId, childId);
   }
   for (const p of entry.prev) {
     if (getTransactionById(p.id)?.type === 'self') {
@@ -132,7 +116,7 @@ export function undoAutoApplied(entryId: string): void {
 /** Unlinked equal-amount pairs from the last week that we did not auto-apply. */
 export function getTransferSuggestions(identity: Identity): TransferPair[] {
   const now = Date.now();
-  const rows = toTransferRows(getTransactionsBetween(now - 7 * DAY_MS, now));
+  const rows = withIds(getTransactionsBetween(now - 7 * DAY_MS, now));
   const dismissed = new Set(getJSON<string[]>(TRANSFER_DISMISSED_KEY, []));
   return findTransferPairs(rows, rows, identity).filter(
     p =>
@@ -142,10 +126,7 @@ export function getTransferSuggestions(identity: Identity): TransferPair[] {
 }
 
 export function dismissTransferSuggestion(expenseId: number, incomeId: number): void {
-  setJSON(
-    TRANSFER_DISMISSED_KEY,
-    addDismissed(getJSON<string[]>(TRANSFER_DISMISSED_KEY, []), transferKey(expenseId, incomeId)),
-  );
+  addDismissedKey(TRANSFER_DISMISSED_KEY, transferKey(expenseId, incomeId));
 }
 
 /** Mark both legs as a transfer between the user's own accounts. */
@@ -177,10 +158,7 @@ export function getRepaymentBanner(): RepaymentBanner | null {
 }
 
 export function dismissRepaymentBanner(parentId: number, candidateId: number): void {
-  setJSON(
-    REPAY_DISMISSED_KEY,
-    addDismissed(getJSON<string[]>(REPAY_DISMISSED_KEY, []), pairKey(parentId, candidateId)),
-  );
+  addDismissedKey(REPAY_DISMISSED_KEY, pairKey(parentId, candidateId));
 }
 
 // ─── Manual "mark as transfer to self" ───────────────────────────────────────
@@ -194,7 +172,7 @@ export function findOppositeLeg(row: TransactionRow): TransactionRow | null {
     row.timestamp - MEDIUM_WINDOW_MS,
     row.timestamp + MEDIUM_WINDOW_MS,
   );
-  const leg = findMatchingLeg({ ...row, id: row.id } as TransferRow, toTransferRows(near));
+  const leg = findMatchingLeg({ ...row, id: row.id } as TransferRow, withIds(near));
   return leg ? near.find(r => r.id === leg.id) ?? null : null;
 }
 
