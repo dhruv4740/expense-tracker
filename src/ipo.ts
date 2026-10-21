@@ -35,7 +35,7 @@ export function ipoKey(name: string): string {
 }
 
 /** Keys match when equal, or one is a prefix of the other (a short ticker vs the full name). */
-export function keysMatch(a: string, b: string): boolean {
+function keysMatch(a: string, b: string): boolean {
   const n = Math.min(a.length, b.length);
   return n >= 4 && a.slice(0, n) === b.slice(0, n);
 }
@@ -252,7 +252,7 @@ export function activeIssuers(events: IpoEvent[]): IpoIssuer[] {
 }
 
 /** After allotment the clearing corporation's debit lands within this window. */
-export const IPO_CLEARING_WINDOW_MS = 7 * 86_400_000;
+const IPO_CLEARING_WINDOW_MS = 7 * 86_400_000;
 
 const CLEARING_RE = /^(?:iccl|indian clearing corp(?:oration)?|nse clearing|nsccl|bse|nse)(?: (?:ltd|limited))?$/;
 

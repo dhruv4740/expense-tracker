@@ -16,10 +16,9 @@ import { isFamilyMember } from './classify';
 import { isSelfTransfer } from './identity';
 import type { Identity } from './identity';
 import { isBusinessName } from './settle';
+import { AMOUNT_EPSILON, MIN_MS, amountsMatch } from './pairingBasics';
 
-const MIN_MS = 60_000;
-const AMOUNT_EPSILON = 0.5;
-export const CANCEL_HIGH_WINDOW_MS = 10 * MIN_MS;
+const CANCEL_HIGH_WINDOW_MS = 10 * MIN_MS;
 export const CANCEL_MEDIUM_WINDOW_MS = 24 * 60 * MIN_MS;
 
 export interface CancelRow {
@@ -98,8 +97,7 @@ export function classifyCancel(
   if (dt > CANCEL_MEDIUM_WINDOW_MS || !isPersonCredit(inc, ctx)) {
     return null;
   }
-  const equal = Math.abs(exp.amount - inc.amount) <= AMOUNT_EPSILON;
-  if (equal) {
+  if (amountsMatch(exp.amount, inc.amount)) {
     const auto = dt <= CANCEL_HIGH_WINDOW_MS && !isManual(exp) && !isManual(inc);
     return { expense: exp, income: inc, confidence: auto ? 'high' : 'medium', basis: 'exact' };
   }

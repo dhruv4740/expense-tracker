@@ -19,11 +19,9 @@
 
 import type { Identity } from './identity';
 import { isSelfTransfer } from './identity';
+import { MIN_MS, amountsMatch } from './pairingBasics';
 
-const MIN_MS = 60_000;
-/** Amounts within this many rupees count as equal (rounding slack). */
-const AMOUNT_EPSILON = 0.5;
-export const HIGH_WINDOW_MS = 3 * MIN_MS;
+const HIGH_WINDOW_MS = 3 * MIN_MS;
 export const MEDIUM_WINDOW_MS = 15 * MIN_MS;
 
 export interface TransferRow {
@@ -86,11 +84,11 @@ const CARD_PURCHASE_RE = /\b(?:spent|purchase)\b[\s\S]*\bcard\b|\bcard\b[\s\S]*\
 /** Categories a plain account-to-account leg can carry; everything else is a merchant/person leg. */
 const TRANSFER_CATEGORIES = new Set(['UPI', 'Other', 'Income', 'Friend Transfer']);
 
-export function isRefundOrReversal(r: TransferRow): boolean {
+function isRefundOrReversal(r: TransferRow): boolean {
   return REFUND_RE.test(r.raw_text ?? '') || REFUND_RE.test(r.merchant ?? '');
 }
 
-export function isCardPurchase(r: TransferRow): boolean {
+function isCardPurchase(r: TransferRow): boolean {
   return r.type === 'expense' && CARD_PURCHASE_RE.test(r.raw_text ?? '');
 }
 
@@ -177,7 +175,7 @@ export function classifyPair(
   if (!eligible(exp) || !eligible(inc) || exp.id === inc.id) {
     return null;
   }
-  if (Math.abs(exp.amount - inc.amount) > AMOUNT_EPSILON) {
+  if (!amountsMatch(exp.amount, inc.amount)) {
     return null;
   }
   const dt = Math.abs(exp.timestamp - inc.timestamp);
@@ -282,7 +280,7 @@ export function findMatchingLeg(row: TransferRow, pool: TransferRow[]): Transfer
     if (o.id === row.id || !eligible(o) || o.type === row.type || o.type === 'self') {
       continue;
     }
-    if (Math.abs(o.amount - row.amount) > AMOUNT_EPSILON) {
+    if (!amountsMatch(o.amount, row.amount)) {
       continue;
     }
     const dt = Math.abs(o.timestamp - row.timestamp);

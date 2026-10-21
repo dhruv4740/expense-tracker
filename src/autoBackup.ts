@@ -11,7 +11,7 @@ import { getJSON, setJSON } from './settings';
 import { deleteBackups, listBackups, writeToFolder } from './native/FileModule';
 
 export const BACKUP_INTERVAL_MS = 7 * 86_400_000;
-export const BACKUP_KEEP = 8;
+const BACKUP_KEEP = 8;
 const FOLDER_KEY = 'backup_folder_uri';
 const LAST_KEY = 'backup_last_ts';
 const NAME_RE = /^expense-tracker-backup-\d{4}-\d{2}-\d{2}-\d{4}(?: \(\d+\))?\.json$/;
