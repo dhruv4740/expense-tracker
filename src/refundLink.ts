@@ -37,7 +37,7 @@ export function isRefundRow(r: RefundRow): boolean {
 }
 
 /** ≥8-digit references in a message (UPI/card refs, order ids with digits only). */
-export function refsIn(text: string | null | undefined): string[] {
+function refsIn(text: string | null | undefined): string[] {
   return [...(text ?? '').matchAll(/\b\d{8,}\b/g)].map(m => m[0]);
 }
 

@@ -7,7 +7,7 @@
 
 export type SplitPreset = 'half' | 'third' | 'twoThirds';
 
-export const PRESET_FRACTION: Record<SplitPreset, number> = {
+const PRESET_FRACTION: Record<SplitPreset, number> = {
   half: 1 / 2,
   third: 1 / 3,
   twoThirds: 2 / 3,
@@ -55,7 +55,7 @@ export interface FriendBalance {
   entries: LedgerEntry[];
 }
 
-export const UNASSIGNED = 'Not assigned';
+const UNASSIGNED = 'Not assigned';
 
 function keyOf(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, '');
